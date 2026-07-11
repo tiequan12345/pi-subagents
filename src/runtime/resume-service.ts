@@ -1,13 +1,15 @@
-import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getArtifactStorageRoot } from "../artifact-storage.ts";
-import { getPiInvocation, getPiShellParts, getSubagentChildProcessEnv } from "../launch/child-command.ts";
+import { getPiShellParts } from "../launch/child-command.ts";
+import {
+	buildBackgroundResumePlan,
+	buildSubagentChildEnv,
+	spawnBackgroundResumeChild,
+} from "../launch/background-resume.ts";
 import { writeResumeTaskArtifact } from "../launch/prompt-artifacts.ts";
 import { expandSubagentTask } from "../launch/task-expansion.ts";
 import { buildInteractiveSentinelShellCommands } from "../launch/interactive-sentinel.ts";
-import { parseEnvString } from "../launch/env.ts";
 import { assertModelAllowed, buildModelRef } from "../agents/model-refs.ts";
 import {
 	getExtensionLaunchArgs,
@@ -217,40 +219,17 @@ export async function resumeSubagentSession(
 
 	const resumedAgent = invocationMetadata?.agent ?? metadata.agent ?? input.agent;
 
-	const resumeEnvVars: Record<string, string> = {};
-	// Restore user-configured env vars from the original launch FIRST,
-	// so internal PI vars below can override them if needed.
-	if (invocationMetadata?.env) {
-		Object.assign(resumeEnvVars, parseEnvString(invocationMetadata.env));
-	}
-	if (invocationMetadata?.agentConfigDir) {
-		resumeEnvVars.PI_CODING_AGENT_DIR = invocationMetadata.agentConfigDir;
-	} else if (process.env.PI_CODING_AGENT_DIR) {
-		resumeEnvVars.PI_CODING_AGENT_DIR = process.env.PI_CODING_AGENT_DIR;
-	}
-	if (invocationMetadata?.denyTools?.length) {
-		resumeEnvVars.PI_DENY_TOOLS = invocationMetadata.denyTools.join(",");
-	} else if (process.env.PI_DENY_TOOLS) {
-		resumeEnvVars.PI_DENY_TOOLS = process.env.PI_DENY_TOOLS;
-	}
-	if (savedExtensions !== undefined) {
-		resumeEnvVars.PI_SUBAGENT_EXTENSIONS = savedExtensions.join(",");
-	} else if (process.env.PI_SUBAGENT_EXTENSIONS) {
-		resumeEnvVars.PI_SUBAGENT_EXTENSIONS = process.env.PI_SUBAGENT_EXTENSIONS;
-	}
-	if (process.env.PI_SUBAGENT_ENABLE_SET_TAB_TITLE === "1") {
-		resumeEnvVars.PI_SUBAGENT_ENABLE_SET_TAB_TITLE = "1";
-	}
-	resumeEnvVars.PI_SUBAGENT_NAME = invocationMetadata?.name ?? name;
-	if (resumedAgent) resumeEnvVars.PI_SUBAGENT_AGENT = resumedAgent;
-	resumeEnvVars.PI_SUBAGENT_SESSION = sessionFile;
-
 	const resumedAsync = invocationMetadata?.async ?? metadata.async ?? true;
 	const resumedAutoExit =
 		invocationMetadata?.autoExit ?? metadata.autoExit ?? true;
-	if (resumedAutoExit) resumeEnvVars.PI_SUBAGENT_AUTO_EXIT = "1";
-	resumeEnvVars.PI_PACKAGE_DIR = "";
-	resumeEnvVars.PI_ARTIFACT_PROJECT_ROOT = getArtifactStorageRoot();
+	const resumeEnvVars = buildSubagentChildEnv({
+		envMetadata: invocationMetadata,
+		extensions: savedExtensions,
+		name: invocationMetadata?.name ?? name,
+		agent: resumedAgent,
+		sessionFile,
+		autoExit: resumedAutoExit,
+	});
 
 	const id = Math.random().toString(16).slice(2, 10);
 	const running: RunningSubagent = {
@@ -276,33 +255,13 @@ export async function resumeSubagentSession(
 	};
 
 	if (metadata.mode === "background") {
-		const invocation = getPiInvocation([
-			...buildResumePiArgs(sessionFile, "background"),
-			...extensionArgs,
-			...parityArgs,
-		]);
-		const child = spawn(invocation.command, invocation.args, {
-			...(resumeCwd ? { cwd: resumeCwd } : {}),
-			detached: true,
-			stdio:
-				running.parentClosePolicy === "continue"
-					? (["pipe", "ignore", "ignore"] as const)
-					: (["pipe", "pipe", "pipe"] as const),
-			env: getSubagentChildProcessEnv(invocation, resumeEnvVars),
+		const plan = await buildBackgroundResumePlan(sessionFile, invocationMetadata, {
+			parentClosePolicy: running.parentClosePolicy,
+			displayName: name,
+			agent: resumedAgent,
+			autoExit: resumedAutoExit,
 		});
-		if (expandedTask !== undefined) {
-			child.stdin?.end(expandedTask);
-		} else {
-			child.stdin?.end();
-		}
-		child.unref();
-		running.childProcess = child;
-		child.stdout?.on("data", (chunk: Buffer) => {
-			running.stdoutTail = rememberTail(running.stdoutTail, chunk);
-		});
-		child.stderr?.on("data", (chunk: Buffer) => {
-			running.stderrTail = rememberTail(running.stderrTail, chunk);
-		});
+		spawnBackgroundResumeChild(running, plan, expandedTask);
 	} else {
 		const surfaceName = invocationMetadata?.sessionTitle ?? displayName;
 		const surface = createSurface(surfaceName);
@@ -362,9 +321,3 @@ export async function resumeSubagentSession(
 	return running;
 }
 
-function rememberTail(
-	current: string | undefined,
-	chunk: Buffer | string,
-): string {
-	return `${current ?? ""}${chunk.toString()}`.slice(-4000);
-}

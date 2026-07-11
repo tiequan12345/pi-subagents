@@ -2,6 +2,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { launchBackgroundSubagent as launchBackgroundSubagentWithRuntime, type BackgroundLaunchRuntime } from "../launch/background.ts";
 import { cleanupNoSessionSessionFile } from "../launch/prep.ts";
 import { watchBackgroundSubagent as watchBackgroundSubagentWithRuntime, type BackgroundWatchRuntime } from "./background-watch.ts";
+import { watchBackgroundSubagentWithRetry } from "./background-retry.ts";
+import { respawnBackgroundChild } from "../launch/background-resume.ts";
 import { getPiInvocation, getPiShellParts, getSubagentChildProcessEnv } from "../launch/child-command.ts";
 import { closeSurface, readScreenAsync } from "../mux.ts";
 import { launchInteractiveSubagent, type InteractiveLaunchRuntime } from "../launch/interactive.ts";
@@ -177,9 +179,19 @@ function getBackgroundWatchRuntime(): BackgroundWatchRuntime {
 export async function watchBackgroundSubagent(
 	running: RunningSubagent,
 	signal?: AbortSignal,
-	timeoutMs?: number,
+	timeoutSeconds?: number,
 ) {
-	return watchBackgroundSubagentWithRuntime(running, getBackgroundWatchRuntime(), signal ?? moduleAbortController.signal, timeoutMs);
+	return watchBackgroundSubagentWithRetry(
+		running,
+		{
+			watch: (r, sig, timeout) =>
+				watchBackgroundSubagentWithRuntime(r, getBackgroundWatchRuntime(), sig, timeout),
+			respawn: respawnBackgroundChild,
+			terminate: (r) => terminateBackgroundChildProcess(r, "SIGTERM"),
+		},
+		signal ?? moduleAbortController.signal,
+		timeoutSeconds,
+	);
 }
 
 function getInteractiveLaunchRuntime(): InteractiveLaunchRuntime {

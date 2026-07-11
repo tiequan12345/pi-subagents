@@ -152,5 +152,8 @@ export function watchBackgroundSubagent(
 		signal.addEventListener("abort", onAbort, { once: true });
 		child.once("exit", onExit);
 		child.once("error", onError);
+		// If the signal aborted before the watcher attached (e.g. during a retry's
+		// async respawn), terminate now; the exit handler resolves the result.
+		if (signal.aborted) onAbort();
 	});
 }
