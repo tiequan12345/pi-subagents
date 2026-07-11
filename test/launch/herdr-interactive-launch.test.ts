@@ -572,7 +572,10 @@ describe("Herdr interactive launch parity", () => {
 		assert.equal(running.mode, "background");
 		assert.equal(running.surface, undefined);
 		assert.equal(running.modelContextWindow, 2048);
-		assert.match(childLog, new RegExp(`PWD=${childCwd.replace(/'/g, "'\\''")}`));
+		assert.match(
+			childLog,
+			new RegExp(`PWD=(?:/private)?${childCwd.replace(/'/g, "'\\''")}`),
+		);
 		assert.match(childLog, /CUSTOM_ENV=from-background-agent/);
 		assert.match(childLog, /SURFACE=\n/);
 		assert.match(childLog, /--no-approve/);

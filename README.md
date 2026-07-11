@@ -38,7 +38,7 @@ Two axes matter:
 - `interactive` or `background`: where the child runs
 - async or sync: whether the parent waits
 
-`interactive` means foreground. Pi opens a visible surface through Herdr, cmux, tmux, zellij, or WezTerm. Normal launches use a backend-specific surface, such as a tab, window, split, or stacked pane.
+`interactive` means foreground. Pi opens a visible surface through Herdr, cmux, tmux, zellij, WezTerm, or Orca. Normal launches use a backend-specific surface, such as a tab, window, split, or stacked pane.
 
 `background` means headless. Pi starts a `pi -p` child process without opening a pane.
 
@@ -46,9 +46,9 @@ Async means the parent gets a “started” result and the child answer comes ba
 
 ### Interactive mux backends
 
-Interactive children open in your current terminal backend. `pi-subagents` supports Herdr, cmux, tmux, zellij, and WezTerm.
+Interactive children open in your current terminal backend. `pi-subagents` supports Herdr, cmux, tmux, zellij, WezTerm, and Orca.
 
-Start `pi` inside the backend you want to use. Leave `PI_SUBAGENT_MUX` unset to let Pi detect it, or set it to `herdr`, `cmux`, `tmux`, `zellij`, or `wezterm` to force one.
+Start `pi` inside the backend you want to use. Leave `PI_SUBAGENT_MUX` unset to let Pi detect it, or set it to `herdr`, `cmux`, `tmux`, `zellij`, `wezterm`, or `orca` to force one.
 
 The backend command must exist, and Pi must be able to see the current pane or session context. If no supported backend is active, interactive launches fail with a setup hint.
 
@@ -581,7 +581,7 @@ User-facing knobs:
 | --- | --- |
 | `PI_ORCHESTRATOR_MODE` | Set `1` to turn the parent into an orchestrator (delegation-only tools, replacement system prompt) |
 | `PI_SUBAGENT_PI_COMMAND` | Launch children through a wrapper command |
-| `PI_SUBAGENT_MUX` | Force `herdr`, `cmux`, `tmux`, `zellij`, or `wezterm` |
+| `PI_SUBAGENT_MUX` | Force `herdr`, `cmux`, `tmux`, `zellij`, `wezterm`, or `orca` |
 | `PI_CODING_AGENT_DIR` | Use a different Pi agent config root |
 | `PI_SUBAGENT_DISABLE_COORDINATOR_ONLY_TURN` | Set `1` to let the parent keep running after async launches |
 | `PI_SUBAGENT_DISABLE_CHILD_CONTEXT_BOUNDARY` | Set `1` for raw forks with no boundary marker |
@@ -606,10 +606,15 @@ Runtime internals you may see while debugging:
 Live test knobs:
 
 - `PI_SUBAGENT_ALLOW_LIVE_WINDOWS`
+- `PI_SUBAGENT_ALLOW_LIVE_ORCA` — additional opt-in for live Orca smoke tests
 - `PI_SUBAGENT_LIVE_MODEL`
 - `PI_SUBAGENT_KEEP_E2E_TMP`
 - `PI_SUBAGENT_LIVE_LOCK_PATH`
 - `PI_SUBAGENT_PROVIDER_RECOVERY_DELAYS_MS` — override the provider-error recovery backoff windows (comma-separated ms, e.g. `10000,11000,12000`) so a live Pi process can exercise the wait → nudge → kill path without waiting the full 30/60/90s. Values below 10000ms are clamped so recovery does not race Pi's own default auto-retry backoff. Defaults to the production `30000,60000,90000`.
+
+Orca backend:
+
+- `PI_SUBAGENT_RENAME_ORCA_WORKTREE` — set `1` to let `set_tab_title` rename the Orca worktree display name (off by default)
 
 ## Testing
 
@@ -666,6 +671,30 @@ npm run test:live-herdr-pi
 ```
 
 Both Herdr smoke scripts check the `herdr` command, server running status, and protocol compatibility before mutating panes. They label created tabs and panes with a unique marker, then close marked surfaces during cleanup.
+
+### Orca live smoke tests
+
+```bash
+npm run test:live-orca-mux
+npm run test:live-orca-pi
+```
+
+Both Orca smoke scripts require **two** opt-ins: `PI_SUBAGENT_ALLOW_LIVE_WINDOWS=1` and `PI_SUBAGENT_ALLOW_LIVE_ORCA=1`. The Pi smoke also requires `PI_SUBAGENT_LIVE_MODEL`. Without the opt-ins each script prints a `SKIP` line and exits before creating Orca terminals.
+
+```bash
+PI_SUBAGENT_ALLOW_LIVE_WINDOWS=1 \
+PI_SUBAGENT_ALLOW_LIVE_ORCA=1 \
+npm run test:live-orca-mux
+
+PI_SUBAGENT_ALLOW_LIVE_WINDOWS=1 \
+PI_SUBAGENT_ALLOW_LIVE_ORCA=1 \
+PI_SUBAGENT_LIVE_MODEL=provider/model[:thinking] \
+npm run test:live-orca-pi
+```
+
+The mux script validates the Orca CLI adapter: creates terminals, sends commands, reads screens, renames tabs, splits, and cleans up. The Pi script starts an interactive parent Pi session inside an Orca terminal, launches a `mode: interactive` subagent, and asserts the child appears as a visible Orca terminal (not a background process).
+
+**Persistence caveat:** Orca terminals are owned by the Orca app runtime, not the parent pi process. If the parent pi crashes, Orca panes may persist visually as orphaned terminals. Result routing does not survive a parent restart — in-flight results are lost. Clean orphaned Orca panes manually via `orca terminal close --terminal <handle> --json`.
 
 Herdr validation record for this release:
 

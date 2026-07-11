@@ -12,6 +12,12 @@ import {
 	renameHerdrCurrentTab,
 	renameHerdrCurrentWorkspace,
 } from "./herdr-surfaces.ts";
+import {
+	createOrcaSplit,
+	createOrcaSurface,
+	renameOrcaCurrentTab,
+	renameOrcaCurrentWorkspace,
+} from "./orca-surfaces.ts";
 import { createZellijSurface } from "./zellij-placement.ts";
 
 const DEFAULT_INTERACTIVE_MIN_COLUMNS = 50;
@@ -45,6 +51,10 @@ export function createSurface(name: string): string {
 
 	if (backend === "herdr") {
 		return createHerdrSurface(name);
+	}
+
+	if (backend === "orca") {
+		return createOrcaSurface(name);
 	}
 
 	return createSurfaceSplit(name, "right");
@@ -305,6 +315,8 @@ export function createSurfaceSplit(
 		return createWezTermSplit(name, direction, fromSurface);
 	if (backend === "zellij")
 		return createZellijSplit(name, direction, fromSurface);
+	if (backend === "orca")
+		return createOrcaSplit(name, direction, fromSurface);
 	return createHerdrSplit(name, direction, fromSurface);
 }
 
@@ -354,6 +366,10 @@ export function renameCurrentTab(title: string): void {
 		renameHerdrCurrentTab(title);
 		return;
 	}
+	if (backend === "orca") {
+		renameOrcaCurrentTab(title);
+		return;
+	}
 	throw new Error("Unsupported mux backend");
 }
 
@@ -393,6 +409,10 @@ export function renameWorkspace(title: string): void {
 	if (backend === "zellij") return;
 	if (backend === "herdr") {
 		renameHerdrCurrentWorkspace(title);
+		return;
+	}
+	if (backend === "orca") {
+		renameOrcaCurrentWorkspace(title);
 		return;
 	}
 	throw new Error("Unsupported mux backend");

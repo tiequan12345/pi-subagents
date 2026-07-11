@@ -27,7 +27,7 @@ import {
 	resolveTaskSessionMode as resolveTaskSessionModeFromSessionFiles,
 	type SubagentSessionMode,
 } from "./session/session-files.ts";
-import { isMuxAvailable, muxSetupHint } from "./mux.ts";
+import { clearMuxBackendCache, isMuxAvailable, muxSetupHint } from "./mux.ts";
 import type { SubagentParamsInput } from "./types.ts";
 import {
 	formatElapsed,
@@ -363,6 +363,7 @@ Your most important job is synthesis: reading sub-agent outputs, understanding t
 
 		moduleAbortController.abort();
 		widgetManager.reset();
+		clearMuxBackendCache();
 		resetSubagentBatchStopRequest();
 		shutdownSubagentsForParentExit();
 		if (ctx.hasUI) {

@@ -1,10 +1,12 @@
 export {
+	clearMuxBackendCache,
 	exitStatusVar,
 	getMuxBackend,
 	isCmuxAvailable,
 	isFishShell,
 	isHerdrAvailable,
 	isMuxAvailable,
+	isOrcaAvailable,
 	isTmuxAvailable,
 	isZellijAvailable,
 	muxSetupHint,

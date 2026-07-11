@@ -13,7 +13,7 @@
   },
   "type": "module",
   "scripts": {
-    "test": "node --test test/test.ts test/system-prompt-mode.test.ts test/runtime/widget.test.ts test/mux/cmux.test.ts test/live-test-guard.test.ts",
+    "test": "npx tsx --test test/test.ts test/system-prompt-mode.test.ts test/runtime/widget.test.ts test/mux/cmux.test.ts test/live-test-guard.test.ts",
     "test:e2e-live-blocking": "node scripts/test-e2e-live-blocking.mjs",
     "test:e2e-live-mix-blocking": "node scripts/test-e2e-live-mix-blocking.mjs",
     "test:e2e-live-deny-tools": "node scripts/test-e2e-live-deny-tools.mjs",
@@ -22,7 +22,9 @@
     "test:e2e-live-stop-after-turn": "node scripts/test-e2e-live-stop-after-turn.mjs",
     "test:e2e-live-mixed-batch": "node scripts/test-e2e-live-mixed-batch.mjs",
     "test:live-herdr-mux": "node scripts/test-live-herdr-mux.mjs",
-    "test:live-herdr-pi": "node scripts/test-live-herdr-pi.mjs"
+    "test:live-herdr-pi": "node scripts/test-live-herdr-pi.mjs",
+    "test:live-orca-mux": "node scripts/test-live-orca-mux.mjs",
+    "test:live-orca-pi": "node scripts/test-live-orca-pi.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.79.0",
@@ -51,6 +53,7 @@
       "pkill",
       "tmux",
       "where.exe",
+      "orca",
       "wezterm",
       "zellij"
     ]

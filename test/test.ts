@@ -1,3 +1,4 @@
+import "./auto-exit.test.ts";
 import "./session/session.test.ts";
 import "./session/child-session-storage.test.ts";
 import "./session/exit-sidecar.test.ts";
@@ -32,3 +33,5 @@ import "./mux/mux.test.ts";
 import "./mux/herdr.test.ts";
 import "./mux/runtime-probe.test.ts";
 import "./mux/zellij-placement.test.ts";
+import "./launch/orca-interactive-launch.test.ts";
+import "./mux/orca.test.ts";

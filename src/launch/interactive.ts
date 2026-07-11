@@ -22,6 +22,8 @@ import {
 } from "./policy.ts";
 import {
 	createSurface,
+	exitStatusVar,
+	getMuxBackend,
 	sendShellCommand,
 	shellEscape,
 } from "../mux.ts";
@@ -142,7 +144,12 @@ export async function launchInteractiveSubagent(
 		parts.push(shellEscape(flag));
 	}
 
-	const envVars = { ...launch.envVars, PI_SUBAGENT_SURFACE: surface };
+	const backend = getMuxBackend();
+	const envVars = {
+		...launch.envVars,
+		PI_SUBAGENT_SURFACE: surface,
+		...(backend === "orca" ? { PI_SUBAGENT_MUX: "orca" } : {}),
+	};
 	const envPrefix = `${Object.entries(envVars)
 		.map(([key, value]) => `${key}=${shellEscape(value)}`)
 		.join(" ")} `;

@@ -18,6 +18,13 @@ import {
 	runHerdrPaneCommand,
 	sendHerdrPaneEnter,
 } from "./herdr.ts";
+import {
+	closeOrcaTerminal,
+	isOrcaStaleHandle,
+	readOrcaTerminalScreen,
+	readOrcaTerminalScreenAsync,
+	sendOrcaCommand,
+} from "./orca.ts";
 
 export function sendCommand(surface: string, command: string): void {
 	const backend = requireMuxBackend();
@@ -64,6 +71,10 @@ export function sendCommand(surface: string, command: string): void {
 		else sendHerdrPaneEnter(surface);
 		return;
 	}
+	if (backend === "orca") {
+		sendOrcaCommand(surface, command);
+		return;
+	}
 	throw new Error("Unsupported mux backend");
 }
 
@@ -85,7 +96,7 @@ function buildStagedShellCommand(scriptPath: string): string {
 
 export function sendShellCommand(surface: string, command: string): void {
 	const backend = requireMuxBackend();
-	if (backend !== "cmux" && backend !== "herdr") {
+	if (backend !== "cmux" && backend !== "herdr" && backend !== "orca") {
 		sendCommand(surface, command);
 		return;
 	}
@@ -130,6 +141,16 @@ export function readScreen(surface: string, lines = 50): string {
 		return tailLines(raw, lines);
 	}
 	if (backend === "herdr") return readHerdrPaneScreen(surface, lines);
+	if (backend === "orca") {
+		try {
+			return readOrcaTerminalScreen(surface, lines);
+		} catch (error) {
+			// Stale handle → throw so pollForExit falls back to sidecar/sentinel.
+			// Transient failures (timeout, RPC glitch) → return "" so poller keeps ticking.
+			if (isOrcaStaleHandle(error)) throw error;
+			return "";
+		}
+	}
 	throw new Error("Unsupported mux backend");
 }
 
@@ -168,6 +189,15 @@ export async function readScreenAsync(surface: string, lines = 50): Promise<stri
 		return tailLines(stdout, lines);
 	}
 	if (backend === "herdr") return readHerdrPaneScreenAsync(surface, lines);
+	if (backend === "orca") {
+		try {
+			return await readOrcaTerminalScreenAsync(surface, lines);
+		} catch (error) {
+			// Same stale/transient split as sync readScreen.
+			if (isOrcaStaleHandle(error)) throw error;
+			return "";
+		}
+	}
 	throw new Error("Unsupported mux backend");
 }
 
@@ -195,6 +225,10 @@ export function closeSurface(surface: string): void {
 	}
 	if (backend === "herdr") {
 		closeHerdrPane(surface);
+		return;
+	}
+	if (backend === "orca") {
+		closeOrcaTerminal(surface);
 		return;
 	}
 	throw new Error("Unsupported mux backend");
