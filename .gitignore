@@ -1,5 +1,13 @@
 node_modules/
-.pi/
+.pi/*
+!.pi/agents/
+.pi/agents/*
+!.pi/agents/smoke.md
+!.pi/agents/smoke-slow.md
+!.pi/agents/bg-mode.md
+!.pi/agents/fg-mode.md
+!.pi/agents/sp-append.md
+!.pi/agents/sp-replace.md
 .ralph/
 .desloppify/
 AGENTS.md

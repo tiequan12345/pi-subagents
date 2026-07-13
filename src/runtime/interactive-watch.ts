@@ -4,12 +4,20 @@ import {
 	consumeSubagentExitSignal,
 	pollForExit,
 } from "../mux.ts";
+import type { PollResult } from "../mux/poll.ts";
 import type { RunningSubagent, SubagentResult } from "../types.ts";
 import { findLastSubagentOutput, getNewEntries } from "../session/session.ts";
 import { traceSubagentLaunch } from "../launch/trace.ts";
 
 export interface InteractiveWatchRuntime {
 	cleanupNoSessionSessionFile(running: RunningSubagent): void;
+}
+
+export function selectInteractiveCompletion(
+	polled: PollResult,
+	sidecar: PollResult | null,
+): PollResult {
+	return sidecar ?? polled;
 }
 
 export async function watchSubagent(
@@ -42,6 +50,15 @@ export async function watchSubagent(
 		});
 
 		traceSubagentLaunch("interactive.watch.pollResult", { name, surface, sessionFile, pollResult });
+		// A shell sentinel can win the poll just before the child atomically publishes
+		// its richer sidecar. If it is already available, use that one result for all
+		// completion fields rather than mixing two protocols.
+		const completion = selectInteractiveCompletion(
+			pollResult,
+			pollResult.signal === undefined
+				? consumeSubagentExitSignal(sessionFile)
+				: null,
+		);
 		const elapsed = Math.floor((Date.now() - startTime) / 1000);
 		let summary: string;
 		if (!running.noSession && existsSync(sessionFile)) {
@@ -51,22 +68,18 @@ export async function watchSubagent(
 			);
 			summary =
 				findLastSubagentOutput(allEntries) ??
-				(pollResult.exitCode !== 0
-					? `Sub-agent exited with code ${pollResult.exitCode}`
+				(completion.exitCode !== 0
+					? `Sub-agent exited with code ${completion.exitCode}`
 					: "Sub-agent exited without output");
 		} else {
 			summary =
-				pollResult.exitCode !== 0
-					? `Sub-agent exited with code ${pollResult.exitCode}`
+				completion.exitCode !== 0
+					? `Sub-agent exited with code ${completion.exitCode}`
 					: "Sub-agent exited without output";
 		}
 
 		const errorMessage =
-			pollResult.reason === "error" ? pollResult.errorMessage : undefined;
-		const exitSignal =
-			pollResult.outputTokens !== undefined
-				? undefined
-				: consumeSubagentExitSignal(sessionFile);
+			completion.reason === "error" ? completion.errorMessage : undefined;
 		cleanupDoneSentinel(running);
 		try {
 			closeSurface(surface);
@@ -78,11 +91,12 @@ export async function watchSubagent(
 			task,
 			summary,
 			sessionFile: running.noSession ? undefined : sessionFile,
-			exitCode: pollResult.exitCode,
+			exitCode: completion.exitCode,
 			elapsed,
-			outputTokens: pollResult.outputTokens ?? exitSignal?.outputTokens,
-			ping: pollResult.ping,
+			outputTokens: completion.outputTokens,
+			ping: completion.ping,
 			errorMessage,
+			exitSignal: completion.signal,
 		};
 	} catch (err: unknown) {
 		const errorMessage = err instanceof Error ? err.message : String(err);

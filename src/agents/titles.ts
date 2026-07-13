@@ -1,4 +1,4 @@
-import type { SessionEntryLike, SubagentParamsInput } from "../types.ts";
+import type { SubagentParamsInput } from "../types.ts";
 
 export function isSetTabTitleToolEnabled(): boolean {
 	return process.env.PI_SUBAGENT_ENABLE_SET_TAB_TITLE === "1";
@@ -100,32 +100,4 @@ export function buildSubagentSessionTitle(
 	return description
 		? `[${agentType}] ${description}`
 		: `[${agentType}]`;
-}
-
-export function getTerminalAssistantSummary(
-	entries: SessionEntryLike[],
-): string | null {
-	for (let i = entries.length - 1; i >= 0; i--) {
-		const entry = entries[i];
-		if (entry.type !== "message") continue;
-		const message = entry.message;
-		if (message?.role !== "assistant") return null;
-		if (message.stopReason === "toolUse") return null;
-		const texts = (message.content ?? [])
-			.filter(
-				(block) =>
-					block.type === "text" &&
-					typeof block.text === "string" &&
-					block.text.trim() !== "",
-			)
-			.map((block) => block.text as string);
-		return texts.length > 0 ? texts.join("\n") : null;
-	}
-	return null;
-}
-
-export function shouldReapStableTerminalSummary(
-	running: Pick<{ autoExit?: boolean }, "autoExit">,
-): boolean {
-	return running.autoExit === true;
 }

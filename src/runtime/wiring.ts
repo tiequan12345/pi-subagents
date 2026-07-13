@@ -173,7 +173,7 @@ export async function launchBackgroundSubagent(
 }
 
 function getBackgroundWatchRuntime(): BackgroundWatchRuntime {
-	return { cleanupNoSessionSessionFile, terminateBackgroundChildProcess };
+	return { cleanupNoSessionSessionFile };
 }
 
 export async function watchBackgroundSubagent(

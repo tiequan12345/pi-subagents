@@ -1,13 +1,19 @@
 import { existsSync, readFileSync } from "node:fs";
-import { clearSubagentExitSidecar, getSubagentExitSidecarPath } from "../session/exit-sidecar.ts";
+import {
+	clearSubagentExitSidecar,
+	decodeSubagentExitSignal,
+	getSubagentExitSidecarPath,
+	type SubagentExitSignal,
+} from "../session/exit-sidecar.ts";
 import { readScreenAsync } from "./io.ts";
 
 export interface PollResult {
-	reason: "done" | "ping" | "sentinel" | "error";
+	reason: "done" | "ping" | "sentinel" | "error" | "compacted";
 	exitCode: number;
 	outputTokens?: number;
 	ping?: { name: string; message: string };
 	errorMessage?: string;
+	signal?: SubagentExitSignal;
 }
 
 /**
@@ -28,14 +34,15 @@ function withDefinedTokens(
  * Interpret an `.exit` sidecar payload. Centralized so both
  * consumeSubagentExitSignal and pollForExit decode the same way.
  */
-function interpretExitSidecar(data: any): PollResult {
-	const tokens =
-		typeof data?.outputTokens === "number" ? data.outputTokens : undefined;
-	if (data?.type === "ping") {
+function interpretExitSidecar(value: unknown): PollResult {
+	const data: SubagentExitSignal = decodeSubagentExitSignal(value);
+	const tokens = data.outputTokens;
+	if (data.type === "ping") {
 		return withDefinedTokens(
 			{
 				reason: "ping" as const,
 				exitCode: 0,
+				signal: data,
 				ping: {
 					name: data.name ?? "subagent",
 					message: data.message ?? "",
@@ -44,18 +51,25 @@ function interpretExitSidecar(data: any): PollResult {
 			tokens,
 		);
 	}
-	if (data?.type === "error") {
-		const errorMessage =
-			typeof data.errorMessage === "string" && data.errorMessage.trim() !== ""
-				? data.errorMessage
-				: "Subagent exited with stopReason=error (no errorMessage in sidecar).";
+	if (data.type === "error") {
 		return withDefinedTokens(
-			{ reason: "error" as const, exitCode: 1, errorMessage },
+			{
+				reason: "error" as const,
+				exitCode: 1,
+				errorMessage: data.errorMessage,
+				signal: data,
+			},
+			tokens,
+		);
+	}
+	if (data.type === "compacted") {
+		return withDefinedTokens(
+			{ reason: "compacted" as const, exitCode: 0, signal: data },
 			tokens,
 		);
 	}
 	return withDefinedTokens(
-		{ reason: "done" as const, exitCode: 0 },
+		{ reason: "done" as const, exitCode: 0, signal: data },
 		tokens,
 	);
 }
@@ -66,14 +80,14 @@ export function consumeSubagentExitSignal(sessionFile: string): PollResult | nul
 	const exitFile = getSubagentExitSidecarPath(sessionFile);
 	if (!existsSync(exitFile)) return null;
 
+	let parsed: unknown;
 	try {
-		const parsed = JSON.parse(readFileSync(exitFile, "utf8"));
-		if (!parsed || typeof parsed !== "object") return null;
-		clearSubagentExitSidecar(sessionFile);
-		return interpretExitSidecar(parsed);
+		parsed = JSON.parse(readFileSync(exitFile, "utf8"));
 	} catch {
-		return null;
+		parsed = undefined;
 	}
+	clearSubagentExitSidecar(sessionFile);
+	return interpretExitSidecar(parsed);
 }
 
 async function waitForNextPoll(interval: number, signal: AbortSignal) {

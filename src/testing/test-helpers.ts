@@ -53,7 +53,6 @@ import {
 } from "../launch/runtime-paths.ts";
 import type {
 	RunningSubagent,
-	SessionEntryLike,
 	SubagentParamsInput,
 } from "../types.ts";
 import {
@@ -85,8 +84,6 @@ import { getSubagentNameError, isInitialPromptInvocation, isOneShotPromptInvocat
 import {
 	buildSubagentSessionTitle,
 	getSubagentDisplayTitle,
-	getTerminalAssistantSummary,
-	shouldReapStableTerminalSummary,
 	type SubagentTitleParams,
 } from "../agents/titles.ts";
 
@@ -152,22 +149,6 @@ export function shouldForceSynchronousLaunchForTest(hasUI: boolean, argv: string
 	return shouldForceSynchronousLaunch(hasUI, argv);
 }
 
-export function getTerminalAssistantSummaryForTest(entries: SessionEntryLike[]) {
-	return getTerminalAssistantSummary(entries);
-}
-
-export function getTerminalAssistantSummaryAfterLaunchForTest(
-	entries: SessionEntryLike[],
-	launchEntryCount: number,
-) {
-	return getTerminalAssistantSummary(entries.slice(launchEntryCount));
-}
-
-export function shouldReapStableTerminalSummaryForTest(
-	running: Pick<RunningSubagent, "autoExit">,
-) {
-	return shouldReapStableTerminalSummary(running);
-}
 
 export function getPiInvocationForTest(args: string[]) {
 	return getPiInvocation(args);

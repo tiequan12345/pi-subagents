@@ -1,12 +1,10 @@
 import { existsSync, statSync } from "node:fs";
 import { consumeSubagentExitSignal } from "../mux.ts";
-import type { RunningSubagent, SessionEntryLike, SubagentResult } from "../types.ts";
-import { findLastSubagentOutput, getEntries, getEntryCount, getNewEntries } from "../session/session.ts";
-import { getTerminalAssistantSummary, shouldReapStableTerminalSummary } from "../agents/titles.ts";
+import type { RunningSubagent, SubagentResult } from "../types.ts";
+import { findLastSubagentOutput, getEntryCount, getNewEntries } from "../session/session.ts";
 
 export interface BackgroundWatchRuntime {
 	cleanupNoSessionSessionFile(running: RunningSubagent): void;
-	terminateBackgroundChildProcess(running: RunningSubagent, signal: NodeJS.Signals): void;
 }
 
 function terminateChildProcessGroup(
@@ -34,13 +32,10 @@ export function watchBackgroundSubagent(
 	timeout?: number,
 ): Promise<SubagentResult> {
 	const child = running.childProcess!;
-	const terminalGraceMs = 1000;
 
 	return new Promise((resolve) => {
 		let settled = false;
 		let timer: ReturnType<typeof setTimeout> | undefined;
-		let terminalSummary: string | null = null;
-		let terminalSeenAt = 0;
 		if (timeout && timeout > 0) {
 			timer = setTimeout(() => {
 				terminateChildProcessGroup(running, "SIGTERM");
@@ -69,25 +64,7 @@ export function watchBackgroundSubagent(
 				const stat = statSync(running.sessionFile);
 				running.entries = getEntryCount(running.sessionFile);
 				running.bytes = stat.size;
-				if (running.noSession) return;
-				if (!shouldReapStableTerminalSummary(running)) return;
-				const summary = getTerminalAssistantSummary(
-					(getEntries(running.sessionFile) as SessionEntryLike[]).slice(
-						running.launchEntryCount ?? 0,
-					),
-				);
-				if (!summary) {
-					terminalSummary = null;
-					terminalSeenAt = 0;
-					return;
-				}
-				if (summary !== terminalSummary) {
-					terminalSummary = summary;
-					terminalSeenAt = Date.now();
-					return;
-				}
-				if (Date.now() - terminalSeenAt < terminalGraceMs) return;
-				runtime.terminateBackgroundChildProcess(running, "SIGTERM");
+
 			} catch {}
 		}, 1000);
 
@@ -105,6 +82,7 @@ export function watchBackgroundSubagent(
 				exitSignal?.reason === "error"
 					? exitSignal.errorMessage
 					: undefined;
+			const typedExitSignal = exitSignal?.signal;
 			const stderr = running.stderrTail?.trim();
 			const stdout = running.stdoutTail?.trim();
 			let summary = `Background agent exited with code ${exitCode}`;
@@ -135,6 +113,7 @@ export function watchBackgroundSubagent(
 				outputTokens: exitSignal?.outputTokens,
 				ping: exitSignal?.ping,
 				errorMessage,
+				exitSignal: typedExitSignal,
 			});
 		};
 		const onError = (error: Error) => {

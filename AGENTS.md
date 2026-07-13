@@ -1,7 +1,5 @@
 # AGENTS.md
 
-At the start of every task, read `README.md` first. Then inspect the relevant code paths before planning or changing anything so you understand the task's scope and the issue being addressed.
-
 ## Project structure contract
 
 Keep the repository organized by ownership. Do not recreate a catch-all `src/subagents/` or generic `test/parts/` directory.
@@ -115,15 +113,25 @@ Guidance:
 - Use at least one GLM model and one GPT-5.5 model for non-trivial orchestration changes.
 - Do not trust a single-model pass.
 
-### Live-test agents
+### Preferred agents
 
-This repo does not commit fixed smoke agents (`.pi/` is gitignored). For each
-live repro, create a temporary agent file shaped for the behavior under test,
-either under `.pi/agents/` or under a temp root pointed at by
-`PI_CODING_AGENT_DIR`, then delete it after.
+Use repo-local smoke agents when possible:
 
-Keep any such agent file temporary and remove it (or set `enabled: false`)
-after testing.
+- `.pi/agents/smoke.md`
+- `.pi/agents/smoke-slow.md`
+- `.pi/agents/bg-mode.md`
+- `.pi/agents/fg-mode.md`
+- `.pi/agents/sp-append.md`
+- `.pi/agents/sp-replace.md`
+
+For custom benchmark-style repros, use:
+
+- `~/.pi/agent/agents/test.md`
+
+If you enable the global `test` agent:
+
+- keep the change temporary
+- restore it to `enabled: false` after testing
 
 ### Standard live-test procedure
 
@@ -147,10 +155,17 @@ For guard or coordination changes, verify:
 - whether they were allowed when opt-out was enabled
 - whether the behavior held for the full parent response, not just one internal continuation step
 
+### Orca backend notes
+
+The Orca mux backend lives in `src/mux/orca.ts` and `src/mux/orca-surfaces.ts`. The live smoke scripts (`test:live-orca-mux`, `test:live-orca-pi`) in `scripts/` are guarded by both `PI_SUBAGENT_ALLOW_LIVE_WINDOWS=1` and `PI_SUBAGENT_ALLOW_LIVE_ORCA=1`.
+
+Detection checks `orca status --json` for `result.runtime.reachable === true` or `result.app.running === true`; auto-detection also requires `orca worktree current --json` to succeed. Live opt-in uses `PI_SUBAGENT_ALLOW_LIVE_ORCA=1` on top of the existing window lock.
+
 ### Cleanup
 
 After live testing:
 
-- restore or delete any temporary agent files created for the repro
+- restore modified agent files
+- restore `~/.pi/agent/agents/test.md` to `enabled: false` if changed
 - remove temporary session dirs if no longer needed
 - clear test-only environment variables

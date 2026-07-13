@@ -304,6 +304,8 @@ A fork copies the entire parent session into a new child run. The child inherits
 
 When the parent model has a larger context window than the child model, the inherited history may exceed what the child can fit. Pi handles this automatically — the child's native compaction trims inherited messages at LLM call time using the child model's actual context window and tokenizer. No manual budget configuration is needed.
 
+Long-running background `auto-exit` children can also outgrow their context mid-task. Pi's threshold compaction (proactive, before overflow) does not auto-retry — an operator would normally type `continue`. A background `pi -p` child has no operator and cannot self-revive (print-mode disposes as soon as the prompt resolves), so when it hits threshold compaction the child exits with a `compacted` signal and the parent resumes the same session with a `continue` nudge, repeating until the task completes. If threshold compaction itself fails or aborts, the child exits with an error instead of a silent `done`. Overflow compaction (context-overflow error) is already auto-retried by Pi. Parent-side threshold resume is bounded by `PI_SUBAGENT_MAX_THRESHOLD_CONTINUES` (default `10`); set it to `0` to disable. This covers background `pi -p` children only — interactive `auto-exit` panes are not deferred (the TUI stays open after a normal turn, so deferring shutdown is unsafe) and still exit at the compaction boundary; an operator can type `continue`.
+
 A fork also gets a handoff marker. Pi appends a short system-prompt note, then writes a hidden custom message with a `<subagent-boundary>` tag at the end of the copied transcript. The tag says: the old messages are background, and the next user message is the child task.
 
 That marker prevents a common failure. A child can read the parent's old role, old tools, or old task and start acting like the parent. The marker tells it where the fork begins.
@@ -591,6 +593,7 @@ User-facing knobs:
 | `PI_SUBAGENT_ENABLE_SET_TAB_TITLE` | Register the optional `set_tab_title` tool |
 | `PI_SUBAGENT_RENAME_TMUX_WINDOW` | Let `set_tab_title` rename the tmux window |
 | `PI_SUBAGENT_RENAME_TMUX_SESSION` | Let `set_tab_title` rename the tmux session |
+| `PI_SUBAGENT_MAX_THRESHOLD_CONTINUES` | Cap parent-side resume after threshold compaction in background children (default `10`; `0` disables) |
 
 Runtime internals you may see while debugging:
 

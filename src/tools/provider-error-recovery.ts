@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SubagentErrorInfo } from "../auto-exit.ts";
+import type { SubagentExitSignal } from "../session/exit-sidecar.ts";
 
 export const PROVIDER_ERROR_RECOVERY_DELAYS_MS = [30_000, 60_000, 90_000] as const;
 export const MIN_PROVIDER_ERROR_RECOVERY_DELAY_MS = 10_000;
@@ -32,7 +33,7 @@ type Timer = ReturnType<typeof setTimeout>;
 export interface ProviderErrorRecoveryRuntime {
 	sendUserMessage(message: string): void;
 	requestShutdown(ctx: ExtensionContext): void;
-	writeExitSignal(payload: object): void;
+	writeExitSignal(payload: SubagentExitSignal): void;
 	getOutputTokens(): number;
 	/**
 	 * Render the recovery countdown (interactive panes only). Called ~once per

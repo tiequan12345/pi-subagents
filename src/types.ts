@@ -1,4 +1,5 @@
 import type { ChildProcess } from "node:child_process";
+import type { SubagentExitSignal } from "./session/exit-sidecar.ts";
 
 export type DeliveryState = "detached" | "awaited";
 export type ParentClosePolicy = "terminate" | "continue";
@@ -46,6 +47,8 @@ export interface SubagentResult {
 	error?: string;
 	errorMessage?: string;
 	ping?: SubagentPing;
+	/** Typed child-side lifecycle signal, preserved for result/retry handling. */
+	exitSignal?: SubagentExitSignal;
 }
 
 export interface CompletedSubagentResult extends SubagentResult {

@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it, mock } from "node:test";
 import {
 	BACKGROUND_RETRY_DELAYS_MS,
+	DEFAULT_MAX_THRESHOLD_CONTINUES,
+	isCompactedBackgroundResult,
 	isRetryableBackgroundResult,
 	resolveBackgroundRetryPolicy,
+	resolveMaxThresholdContinues,
 	watchBackgroundSubagentWithRetry,
 	type BackgroundRetryDeps,
 } from "../../src/runtime/background-retry.ts";
@@ -49,6 +52,18 @@ function ok(summary = "done"): SubagentResult {
 		sessionFile: "/tmp/test-session.jsonl",
 		exitCode: 0,
 		elapsed: 0,
+	};
+}
+
+function compacted(): SubagentResult {
+	return {
+		name: "test-agent",
+		task: "t",
+		summary: "",
+		sessionFile: "/tmp/test-session.jsonl",
+		exitCode: 0,
+		elapsed: 0,
+		exitSignal: { type: "compacted" },
 	};
 }
 
@@ -244,5 +259,153 @@ describe("watchBackgroundSubagentWithRetry", () => {
 		};
 		const result = await watchBackgroundSubagentWithRetry(bgRunning(), deps, new AbortController().signal, undefined, [5, 5]);
 		assert.equal(result.errorMessage, "WebSocket error");
+	});
+});
+
+describe("resolveMaxThresholdContinues", () => {
+	it("defaults to 10", () => {
+		assert.equal(resolveMaxThresholdContinues(undefined), 10);
+		assert.equal(DEFAULT_MAX_THRESHOLD_CONTINUES, 10);
+	});
+
+	it("parses a positive integer override", () => {
+		assert.equal(resolveMaxThresholdContinues("3"), 3);
+	});
+
+	it("allows zero (disables compaction resume entirely)", () => {
+		assert.equal(resolveMaxThresholdContinues("0"), 0);
+	});
+
+	it("falls back for invalid input", () => {
+		assert.equal(resolveMaxThresholdContinues(""), 10);
+		assert.equal(resolveMaxThresholdContinues("junk"), 10);
+		assert.equal(resolveMaxThresholdContinues("-1"), 10);
+	});
+});
+
+describe("isCompactedBackgroundResult", () => {
+	it("recognizes a compacted result on a session-backed child", () => {
+		assert.equal(isCompactedBackgroundResult(compacted(), bgRunning()), true);
+	});
+
+	it("is false for an ordinary done result", () => {
+		assert.equal(isCompactedBackgroundResult(ok(), bgRunning()), false);
+	});
+
+	it("is false for a noSession child (nothing to resume)", () => {
+		assert.equal(isCompactedBackgroundResult(compacted(), bgRunning({ noSession: true })), false);
+	});
+
+	it("is false for a child without a session file", () => {
+		assert.equal(isCompactedBackgroundResult(compacted(), bgRunning({ sessionFile: undefined })), false);
+	});
+});
+
+describe("watchBackgroundSubagentWithRetry — threshold compaction", () => {
+	it("resumes immediately (no backoff) after a threshold compaction", async () => {
+		mock.timers.enable({ apis: ["setTimeout"] });
+		try {
+			const watch = queueingWatch([compacted(), ok("resumed")]);
+			const deps = retryDeps(watch.fn);
+			const promise = watchBackgroundSubagentWithRetry(
+				bgRunning(),
+				deps,
+				new AbortController().signal,
+				undefined,
+				[5000],
+				5,
+			);
+			await flushMicrotasks();
+			// Compaction resumes with no backoff: respawn happens before any tick,
+			// unlike the 5s error-retry backoff.
+			assert.equal(deps.respawns, 1);
+			const result = await promise;
+			assert.equal(result.summary, "resumed");
+			assert.equal(watch.calls.length, 2);
+		} finally {
+			mock.timers.reset();
+		}
+	});
+
+	it("resumes repeatedly until success, bounded by the threshold budget", async () => {
+		const watch = queueingWatch([compacted(), compacted(), ok("done")]);
+		const deps = retryDeps(watch.fn);
+		const result = await watchBackgroundSubagentWithRetry(
+			bgRunning(),
+			deps,
+			new AbortController().signal,
+			undefined,
+			[5],
+			2,
+		);
+		assert.equal(result.summary, "done");
+		assert.equal(deps.respawns, 2);
+		assert.equal(watch.calls.length, 3);
+	});
+
+	it("returns the last compacted result once the threshold budget is exhausted", async () => {
+		const watch = queueingWatch([compacted(), compacted(), compacted()]);
+		const deps = retryDeps(watch.fn);
+		const result = await watchBackgroundSubagentWithRetry(
+			bgRunning(),
+			deps,
+			new AbortController().signal,
+			undefined,
+			[5],
+			2,
+		);
+		assert.equal(result.exitSignal?.type, "compacted");
+		assert.ok(result.errorMessage);
+		assert.equal(deps.respawns, 2);
+		assert.equal(watch.calls.length, 3);
+	});
+
+	it("interleaves compaction resumes and error retries in one run", async () => {
+		// compacted (immediate resume) -> transient error (backoff resume) -> ok
+		const watch = queueingWatch([compacted(), err("WebSocket error"), ok("done")]);
+		const deps = retryDeps(watch.fn);
+		const result = await watchBackgroundSubagentWithRetry(
+			bgRunning(),
+			deps,
+			new AbortController().signal,
+			undefined,
+			[5],
+			5,
+		);
+		assert.equal(result.summary, "done");
+		assert.equal(deps.respawns, 2);
+		assert.equal(watch.calls.length, 3);
+	});
+
+	it("does not resume a noSession compacted child", async () => {
+		const watch = queueingWatch([compacted()]);
+		const deps = retryDeps(watch.fn);
+		const result = await watchBackgroundSubagentWithRetry(
+			bgRunning({ noSession: true }),
+			deps,
+			new AbortController().signal,
+			undefined,
+			[5],
+			5,
+		);
+		assert.equal(result.exitSignal?.type, "compacted");
+		assert.ok(result.errorMessage);
+		assert.equal(deps.respawns, 0);
+	});
+
+	it("does not resume compaction when the budget is zero (opt-out)", async () => {
+		const watch = queueingWatch([compacted()]);
+		const deps = retryDeps(watch.fn);
+		const result = await watchBackgroundSubagentWithRetry(
+			bgRunning(),
+			deps,
+			new AbortController().signal,
+			undefined,
+			[5],
+			0,
+		);
+		assert.equal(result.exitSignal?.type, "compacted");
+		assert.ok(result.errorMessage);
+		assert.equal(deps.respawns, 0);
 	});
 });

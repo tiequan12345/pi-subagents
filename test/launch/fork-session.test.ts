@@ -10,8 +10,6 @@ import {
 	getLaunchedSubagentResultForTest,
 	markSubagentBatchBlockingForTest,
 	getStartedSubagentDetailsForTest,
-	getTerminalAssistantSummaryAfterLaunchForTest,
-	getTerminalAssistantSummaryForTest,
 	renderSubagentWidgetForTest,
 	resetSubagentStateForTest,
 	routeDetachedSubagentCompletionForTest,
@@ -109,22 +107,9 @@ describe("fork session launch behavior", () => {
 			},
 		] as any[];
 
-		assert.equal(
-			getTerminalAssistantSummaryAfterLaunchForTest(seededEntries, 2),
-			newSummary,
-		);
 		assert.equal(findLastAssistantMessage(seededEntries.slice(2)), newSummary);
-		assert.equal(
-			getTerminalAssistantSummaryAfterLaunchForTest(
-				seededEntries,
-				seededEntries.length,
-			),
-			null,
-		);
-		assert.equal(
-			getTerminalAssistantSummaryForTest(seededEntries.slice(0, 2)),
-			oldSummary,
-		);
+		assert.equal(findLastAssistantMessage(seededEntries.slice(seededEntries.length)), null);
+		assert.equal(findLastAssistantMessage(seededEntries.slice(0, 2)), oldSummary);
 	});
 
 	it("creates forked child session files directly", () => {

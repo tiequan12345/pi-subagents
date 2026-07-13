@@ -15,14 +15,12 @@ import {
 	getSubagentAgentRequirementErrorForTest,
 	getSubagentDisplayTitleForTest,
 	getSubagentNameErrorForTest,
-	getTerminalAssistantSummaryForTest,
 	resetSubagentStateForTest,
 	resolveEffectiveSessionModeForTest,
 	resolveSubagentBlockingForTest,
 	resolveSubagentConfigDir,
 	resolveSubagentRuntimePathsForTest,
 	seedSubagentSessionFileForTest,
-	shouldReapStableTerminalSummaryForTest,
 	writeSystemPromptArtifactForTest,
 	createTestDir,
 	resolveSubagentCwdForTest,
@@ -396,68 +394,6 @@ describe("ambient agents and runtime paths", () => {
 		assert.match(artifactPath, /\.md$/);
 	});
 
-	it("detects terminal assistant summaries only after final non-tool-use output", () => {
-		assert.equal(
-			getTerminalAssistantSummaryForTest([
-				{
-					type: "message",
-					message: {
-						role: "assistant",
-						stopReason: "stop",
-						content: [{ type: "text", text: "DONE" }],
-					},
-				},
-			] as any[]),
-			"DONE",
-		);
-
-		assert.equal(
-			getTerminalAssistantSummaryForTest([
-				{
-					type: "message",
-					message: {
-						role: "assistant",
-						stopReason: "toolUse",
-						content: [{ type: "text", text: "Not final" }],
-					},
-				},
-			] as any[]),
-			null,
-		);
-
-		assert.equal(
-			getTerminalAssistantSummaryForTest([
-				{
-					type: "message",
-					message: {
-						role: "assistant",
-						stopReason: "stop",
-						content: [{ type: "text", text: "Done" }],
-					},
-				},
-				{
-					type: "message",
-					message: {
-						role: "toolResult",
-						content: [{ type: "text", text: "later" }],
-					},
-				},
-			] as any[]),
-			null,
-		);
-	});
-
-	it("only reaps stable terminal summaries for auto-exit background agents", () => {
-		assert.equal(
-			shouldReapStableTerminalSummaryForTest({ autoExit: true }),
-			true,
-		);
-		assert.equal(
-			shouldReapStableTerminalSummaryForTest({ autoExit: false }),
-			false,
-		);
-		assert.equal(shouldReapStableTerminalSummaryForTest({}), false);
-	});
 
 	it("validates lower-kebab scope-role subagent names", () => {
 		for (const name of ["auth-scout", "diff-reviewer", "session-resume-tester", "api-v2-fixer"]) {

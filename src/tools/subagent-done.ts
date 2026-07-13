@@ -3,9 +3,18 @@
  * - Provides a `subagent_done` tool for autonomous agents to self-terminate
  */
 
-import { existsSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+	beginThresholdCompaction,
+	completeThresholdCompaction,
+	getThresholdCompactionExitSignal,
+	type ThresholdCompactionState,
+} from "../runtime/threshold-compaction.ts";
+import {
+	type SubagentExitSignal,
+	writeSubagentExitSignal,
+} from "../session/exit-sidecar.ts";
 import {
 	findLatestAssistantError,
 	isOperatorInput,
@@ -164,6 +173,7 @@ export default function (pi: ExtensionAPI) {
 	const isInteractive = !!process.env.PI_SUBAGENT_SURFACE;
 	const denied: string[] = getDeniedToolNames(autoExit);
 	let outputTokens = 0;
+	let thresholdCompaction: ThresholdCompactionState = "idle";
 
 	function requestShutdown(ctx: { shutdown: () => void }) {
 		setTimeout(() => {
@@ -175,12 +185,9 @@ export default function (pi: ExtensionAPI) {
 		}, 0);
 	}
 
-	function writeExitSignal(payload: object) {
+	function writeExitSignal(payload: SubagentExitSignal) {
 		const sessionFile = process.env.PI_SUBAGENT_SESSION;
-		if (!sessionFile) return;
-		const exitFile = `${sessionFile}.exit`;
-		if (existsSync(exitFile)) return;
-		writeFileSync(exitFile, JSON.stringify(payload), "utf8");
+		if (sessionFile) writeSubagentExitSignal(sessionFile, payload);
 	}
 
 	const subagentName = process.env.PI_SUBAGENT_NAME ?? "";
@@ -344,10 +351,17 @@ export default function (pi: ExtensionAPI) {
 			});
 			return;
 		}
-		writeExitSignal({ type: "done", outputTokens });
+		const compactionSignal = getThresholdCompactionExitSignal(
+			thresholdCompaction,
+			outputTokens,
+		);
+		writeExitSignal(compactionSignal ?? { type: "done", outputTokens });
 	});
 
 	pi.on("session_before_compact", (event) => {
+		if (autoExit && !isInteractive && event.reason === "threshold") {
+			thresholdCompaction = beginThresholdCompaction();
+		}
 		const pending = pendingPiRecovery;
 		if (!pending) return;
 		if (event.reason !== "overflow" || !event.willRetry) return;
@@ -360,9 +374,17 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_compact", (event) => {
-		if (!pendingPiRecovery) return;
-		if (event.reason !== "overflow" || !event.willRetry) return;
-		cancelPendingPiRecovery();
+		if (pendingPiRecovery && event.reason === "overflow" && event.willRetry) {
+			cancelPendingPiRecovery();
+		}
+		if (
+			autoExit &&
+			!isInteractive &&
+			event.reason === "threshold" &&
+			event.willRetry !== true
+		) {
+			thresholdCompaction = completeThresholdCompaction();
+		}
 	});
 
 	// Auto-exit: when the agent loop ends, shut down automatically.
@@ -375,6 +397,7 @@ export default function (pi: ExtensionAPI) {
 		let agentStarted = false;
 
 		pi.on("agent_start", () => {
+			thresholdCompaction = "idle";
 			agentStarted = true;
 			userTookOver = false;
 		});
@@ -446,8 +469,13 @@ export default function (pi: ExtensionAPI) {
 			pendingProviderError = null;
 			providerErrorRecovery.cancelPendingRecovery(true);
 			cancelPendingPiRecovery();
-			writeExitSignal({ type: "done", outputTokens });
-			requestShutdown(ctx);
+			if (isInteractive) {
+				writeExitSignal({ type: "done", outputTokens });
+				requestShutdown(ctx);
+			}
+			// Background (`pi -p`) autoExit: Pi may run threshold compaction after
+			// this handler. Let print-mode reach session_shutdown, which reports the
+			// canonical done/compacted/error payload for the parent to act on.
 		});
 	}
 
@@ -471,6 +499,9 @@ export default function (pi: ExtensionAPI) {
 				);
 			}
 
+			if (typeof params.message !== "string") {
+				throw new Error("caller_ping requires a string message.");
+			}
 			writeExitSignal({
 				type: "ping",
 				name: process.env.PI_SUBAGENT_NAME ?? "subagent",
