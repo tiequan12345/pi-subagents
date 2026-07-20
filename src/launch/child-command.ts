@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import { shellEscape } from "../mux.ts";
+import { stripReservedDelegatedAuthEnv } from "./delegated-auth.ts";
 
 export interface PiInvocation {
 	command: string;
@@ -92,5 +93,7 @@ export function getSubagentChildProcessEnv(
 	_invocation: PiInvocation,
 	envVars: Record<string, string>,
 ): NodeJS.ProcessEnv {
-	return { ...process.env, ...envVars };
+	// Drop inherited lease/runtime secrets before applying the child overlay.
+	const base = stripReservedDelegatedAuthEnv({ ...process.env });
+	return { ...base, ...envVars };
 }

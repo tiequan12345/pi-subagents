@@ -18,9 +18,11 @@ import { resolveSubagentCwd, type ResolvedSubagentRuntimePaths } from "./runtime
 import type { RunningSubagent, SubagentParamsInput } from "../types.ts";
 import {
 	buildIdentityBlock,
+	readSubagentExtensionEntry,
 	type PersistedSubagentLaunchMetadata,
 	type SubagentSessionMode,
 } from "../session/session-files.ts";
+import { stripReservedDelegatedAuthEnv } from "./delegated-auth.ts";
 import { getSubagentToolLaunchArgs } from "../tools/policy.ts";
 import { buildSkillLaunchPlan, formatInjectedSkills, type SkillLaunchPlan } from "./skills.ts";
 import {
@@ -66,6 +68,12 @@ export interface PreparedSubagentLaunch {
 	sessionTitle?: string;
 	denySet: Set<string>;
 	effectiveExtensions?: string[];
+	/** Extra `-e` paths required by delegated auth (used when defaults stay enabled). */
+	requiredExtensions?: string[];
+	delegatedAuth?: {
+		brokerId: string;
+		mode: "self-managed";
+	};
 	identity: string;
 	identityInSystemPrompt: boolean;
 	/** Original agent-level auto-exit, preserved before any headless-mode override. */
@@ -184,12 +192,59 @@ export function getPreparedSkillLaunchArgs(prepared: PreparedSubagentLaunch): st
 export function getExtensionLaunchArgs(
 	extensionSpecs: string[] | undefined,
 	mandatoryExtensionPath: string,
+	requiredExtensions: string[] = [],
 ): string[] {
 	const args: string[] = [];
 	if (extensionSpecs !== undefined) args.push("--no-extensions");
 	args.push("-e", mandatoryExtensionPath);
-	for (const extension of extensionSpecs ?? []) args.push("-e", extension);
+	const seen = new Set<string>([mandatoryExtensionPath]);
+	for (const extension of extensionSpecs ?? []) {
+		if (seen.has(extension)) continue;
+		seen.add(extension);
+		args.push("-e", extension);
+	}
+	// Required broker paths always get `-e`, including when defaults remain enabled.
+	for (const extension of requiredExtensions) {
+		if (seen.has(extension)) continue;
+		seen.add(extension);
+		args.push("-e", extension);
+	}
 	return args;
+}
+
+/**
+ * Resume extension argv. Launch metadata with omitted `extensions` means
+ * "all defaults" (not "none"). Only true legacy sessions without metadata
+ * keep the old `--no-extensions -e done` fallback.
+ */
+export function resolveResumeExtensionLaunchArgs(
+	sessionFile: string,
+	metadata: PersistedSubagentLaunchMetadata | undefined,
+	mandatoryExtensionPath: string,
+): { extensions: string[] | undefined; args: string[] } {
+	const required = metadata?.requiredExtensions ?? [];
+	if (metadata) {
+		return {
+			extensions: metadata.extensions,
+			args: getExtensionLaunchArgs(
+				metadata.extensions,
+				mandatoryExtensionPath,
+				required,
+			),
+		};
+	}
+	const sidecar = readSubagentExtensionEntry(sessionFile);
+	if (sidecar !== undefined) {
+		return {
+			extensions: sidecar,
+			args: getExtensionLaunchArgs(sidecar, mandatoryExtensionPath, required),
+		};
+	}
+	// Legacy: no metadata and no sidecar → only the mandatory helper.
+	return {
+		extensions: [],
+		args: getExtensionLaunchArgs([], mandatoryExtensionPath, required),
+	};
 }
 
 export function getFlagsLaunchArgs(flags: string | undefined): string[] {
@@ -221,6 +276,7 @@ export function getPreparedExtensionLaunchArgs(
 	return getExtensionLaunchArgs(
 		prepared.effectiveExtensions,
 		mandatoryExtensionPath,
+		prepared.requiredExtensions ?? [],
 	);
 }
 
@@ -346,6 +402,12 @@ export function buildPersistedSubagentLaunchMetadata(
 		...(prepared.effectiveExtensions !== undefined
 			? { extensions: prepared.effectiveExtensions }
 			: {}),
+		...(prepared.requiredExtensions?.length
+			? { requiredExtensions: prepared.requiredExtensions }
+			: {}),
+		...(prepared.delegatedAuth
+			? { delegatedAuth: prepared.delegatedAuth }
+			: {}),
 		noContextFiles: resolveSubagentNoContextFiles(prepared.agentDefs),
 		noSession: resolveSubagentNoSession(prepared.agentDefs),
 		trustProject: prepared.agentDefs?.trustProject === true,
@@ -378,6 +440,8 @@ export function getBaseSubagentEnvVars(
 	// so internal PI vars below can override them if needed.
 	if (prepared.agentDefs?.env) {
 		Object.assign(envVars, parseEnvString(prepared.agentDefs.env));
+		// Frontmatter must not spoof delegated-auth internals.
+		stripReservedDelegatedAuthEnv(envVars);
 	}
 	if (prepared.runtimePaths.localAgentConfigDir) {
 		envVars.PI_CODING_AGENT_DIR = prepared.runtimePaths.localAgentConfigDir;

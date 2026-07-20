@@ -55,6 +55,13 @@ export interface PersistedSubagentLaunchMetadata {
 	injectSkills?: string;
 	denyTools: string[];
 	extensions?: string[];
+	/** Always passed as extra `-e` paths (broker-required), even when defaults load. */
+	requiredExtensions?: string[];
+	/** Non-secret marker: resume must re-prepare this broker successfully. */
+	delegatedAuth?: {
+		brokerId: string;
+		mode: "self-managed";
+	};
 	noContextFiles: boolean;
 	noSession: boolean;
 	trustProject?: boolean;

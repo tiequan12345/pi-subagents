@@ -10,9 +10,11 @@ import {
 	it,
 	join,
 	mkdirSync,
+	readFileSync,
 	writeFileSync,
 } from "../support/index.ts";
 import { coordinateSubagentLaunch } from "../../src/launch/launch-coordinator.ts";
+import { getPreparedExtensionLaunchArgs } from "../../src/launch/prep.ts";
 
 describe("launch coordinator", () => {
 	it("prepares, seeds, persists, and returns common launch facts", async () => {
@@ -133,5 +135,171 @@ describe("launch coordinator", () => {
 		const metadataEntries = (getEntries(launch.prepared.subagentSessionFile) as Array<Record<string, unknown>>)
 			.filter((entry) => entry.customType === "pi-subagents_launch_metadata");
 		assert.equal(metadataEntries.length, 1);
+	});
+
+	it("injects self-managed delegated auth before seed and metadata", async () => {
+		const cwd = createTestDir();
+		mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
+		writeFileSync(
+			join(cwd, ".pi", "agents", "codex.md"),
+			[
+				"---",
+				"name: codex",
+				"model: openai-codex/gpt-5.6-luna",
+				"extensions: npm:pi-mcp-adapter",
+				"env: |",
+				"  PI_DELEGATED_AUTH_RUNTIME_DIR=/spoofed",
+				"---",
+				"Codex child.",
+			].join("\n"),
+		);
+		const parentSession = join(cwd, "parent-auth.jsonl");
+		writeFileSync(parentSession, `${JSON.stringify(SESSION_HEADER)}\n`);
+
+		const globalScope = globalThis as typeof globalThis & {
+			__piDelegatedAuthBrokerRegistry?: { list: () => unknown[] };
+		};
+		const previous = globalScope.__piDelegatedAuthBrokerRegistry;
+		globalScope.__piDelegatedAuthBrokerRegistry = {
+			list: () => [
+				{
+					id: "pi-multi-auth",
+					capabilities: ["delegated-auth"],
+					prepareSubagentAuth: () => ({
+						mode: "self-managed",
+						extensionDirs: ["/abs/pi-multi-auth"],
+						env: { PI_DELEGATED_AUTH_RUNTIME_DIR: "/abs/runtime" },
+					}),
+				},
+			],
+		};
+		try {
+			const launch = await coordinateSubagentLaunch(
+				{
+					name: "codex-child",
+					title: "Codex child",
+					task: "Use selected account",
+					agent: "codex",
+				},
+				{
+					cwd,
+					sessionManager: {
+						getSessionFile: () => parentSession,
+						getSessionId: () => "parent-session-id",
+						getLeafId: () => null,
+					},
+				},
+				{ mode: "background" },
+			);
+
+			assert.deepEqual(launch.prepared.effectiveExtensions, [
+				"npm:pi-mcp-adapter",
+				"/abs/pi-multi-auth",
+			]);
+			assert.deepEqual(launch.prepared.requiredExtensions, ["/abs/pi-multi-auth"]);
+			assert.deepEqual(launch.launchMetadata.extensions, [
+				"npm:pi-mcp-adapter",
+				"/abs/pi-multi-auth",
+			]);
+			assert.deepEqual(launch.launchMetadata.requiredExtensions, [
+				"/abs/pi-multi-auth",
+			]);
+			assert.deepEqual(launch.launchMetadata.delegatedAuth, {
+				brokerId: "pi-multi-auth",
+				mode: "self-managed",
+			});
+			assert.equal(
+				launch.envVars.PI_SUBAGENT_EXTENSIONS,
+				"npm:pi-mcp-adapter,/abs/pi-multi-auth",
+			);
+			assert.equal(launch.envVars.PI_DELEGATED_AUTH_RUNTIME_DIR, "/abs/runtime");
+
+			const extensionSidecar = JSON.parse(
+				readFileSync(`${launch.prepared.subagentSessionFile}.ext`, "utf8"),
+			) as { extensions?: string[] };
+			assert.deepEqual(extensionSidecar.extensions, [
+				"npm:pi-mcp-adapter",
+				"/abs/pi-multi-auth",
+			]);
+		} finally {
+			if (previous) globalScope.__piDelegatedAuthBrokerRegistry = previous;
+			else delete globalScope.__piDelegatedAuthBrokerRegistry;
+		}
+	});
+
+	it("keeps all-extensions defaults and records required broker -e paths", async () => {
+		const cwd = createTestDir();
+		mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
+		writeFileSync(
+			join(cwd, ".pi", "agents", "open.md"),
+			[
+				"---",
+				"name: open",
+				"model: openai-codex/gpt-5.6-luna",
+				"extensions: all",
+				"---",
+				"Open child.",
+			].join("\n"),
+		);
+		const parentSession = join(cwd, "parent-all-ext.jsonl");
+		writeFileSync(parentSession, `${JSON.stringify(SESSION_HEADER)}\n`);
+
+		const globalScope = globalThis as typeof globalThis & {
+			__piDelegatedAuthBrokerRegistry?: { list: () => unknown[] };
+		};
+		const previous = globalScope.__piDelegatedAuthBrokerRegistry;
+		globalScope.__piDelegatedAuthBrokerRegistry = {
+			list: () => [
+				{
+					id: "pi-multi-auth",
+					capabilities: ["delegated-auth"],
+					prepareSubagentAuth: () => ({
+						mode: "self-managed",
+						extensionDirs: ["/abs/pi-multi-auth"],
+						env: { PI_DELEGATED_AUTH_RUNTIME_DIR: "/abs/runtime" },
+					}),
+				},
+			],
+		};
+		try {
+			const launch = await coordinateSubagentLaunch(
+				{
+					name: "open-child",
+					title: "Open child",
+					task: "Use default extensions",
+					agent: "open",
+				},
+				{
+					cwd,
+					sessionManager: {
+						getSessionFile: () => parentSession,
+						getSessionId: () => "parent-session-id",
+						getLeafId: () => null,
+					},
+				},
+				{ mode: "background" },
+			);
+			assert.equal(launch.prepared.effectiveExtensions, undefined);
+			assert.deepEqual(launch.prepared.requiredExtensions, ["/abs/pi-multi-auth"]);
+			assert.equal(launch.launchMetadata.extensions, undefined);
+			assert.deepEqual(launch.launchMetadata.requiredExtensions, [
+				"/abs/pi-multi-auth",
+			]);
+			assert.deepEqual(launch.launchMetadata.delegatedAuth, {
+				brokerId: "pi-multi-auth",
+				mode: "self-managed",
+			});
+			assert.equal(launch.envVars.PI_DELEGATED_AUTH_RUNTIME_DIR, "/abs/runtime");
+
+			const args = getPreparedExtensionLaunchArgs(
+				launch.prepared,
+				"/tmp/subagent-done.ts",
+			);
+			assert.ok(!args.includes("--no-extensions"));
+			assert.ok(args.includes("/abs/pi-multi-auth"));
+		} finally {
+			if (previous) globalScope.__piDelegatedAuthBrokerRegistry = previous;
+			else delete globalScope.__piDelegatedAuthBrokerRegistry;
+		}
 	});
 });

@@ -3,17 +3,20 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getArtifactStorageRoot } from "../artifact-storage.ts";
 import { getPiInvocation, getSubagentChildProcessEnv } from "./child-command.ts";
+import {
+	applyDelegatedAuthEnvOverlay,
+	stripReservedDelegatedAuthEnv,
+} from "./delegated-auth.ts";
 import { parseEnvString } from "./env.ts";
 import {
-	getExtensionLaunchArgs,
 	getPersistedPromptLaunchArgs,
 	getPersistedSessionParityArgs,
+	resolveResumeExtensionLaunchArgs,
 } from "./prep.ts";
 import { buildResumePiArgs, getResumeCwd, resolveResumeLaunchMetadata } from "./resume.ts";
 import { clearSubagentExitSidecar } from "../session/exit-sidecar.ts";
 import { getEntryCount } from "../session/session.ts";
 import {
-	readSubagentExtensionEntry,
 	readSubagentLaunchMetadata,
 	type PersistedSubagentLaunchMetadata,
 } from "../session/session-files.ts";
@@ -67,7 +70,10 @@ export function buildSubagentChildEnv(options: {
 	const env: Record<string, string> = {};
 	// Restore user-configured env vars from the original launch FIRST, so the
 	// internal PI vars below can override them if needed.
-	if (envMetadata?.env) Object.assign(env, parseEnvString(envMetadata.env));
+	if (envMetadata?.env) {
+		Object.assign(env, parseEnvString(envMetadata.env));
+		stripReservedDelegatedAuthEnv(env);
+	}
 	if (envMetadata?.agentConfigDir) {
 		env.PI_CODING_AGENT_DIR = envMetadata.agentConfigDir;
 	} else if (process.env.PI_CODING_AGENT_DIR) {
@@ -118,11 +124,11 @@ export async function buildBackgroundResumePlan(
 		autoExit: boolean;
 	},
 ): Promise<BackgroundResumePlan> {
-	const extensions =
-		invocationMetadata?.extensions ?? readSubagentExtensionEntry(sessionFile);
-	const extensionArgs = extensions
-		? getExtensionLaunchArgs(extensions, subagentDonePath())
-		: ["--no-extensions", "-e", subagentDonePath()];
+	const { extensions, args: extensionArgs } = resolveResumeExtensionLaunchArgs(
+		sessionFile,
+		invocationMetadata,
+		subagentDonePath(),
+	);
 	const parityArgs = [
 		...getPersistedPromptLaunchArgs(invocationMetadata),
 		...(await getPersistedSessionParityArgs(invocationMetadata, "background")),
@@ -133,17 +139,25 @@ export async function buildBackgroundResumePlan(
 		...extensionArgs,
 		...parityArgs,
 	]);
+	const env = buildSubagentChildEnv({
+		envMetadata: invocationMetadata,
+		extensions,
+		name: invocationMetadata?.name ?? options.displayName,
+		agent: invocationMetadata?.agent ?? options.agent,
+		sessionFile,
+		autoExit: options.autoExit,
+	});
+	// Re-prepare non-secret overlay env; extensions stay on persisted metadata.
+	await applyDelegatedAuthEnvOverlay(env, {
+		effectiveModel: invocationMetadata?.model,
+		effectiveModelRef: invocationMetadata?.modelRef,
+		subagentSessionId: sessionFile,
+		required: invocationMetadata?.delegatedAuth,
+	});
 	return {
 		invocation,
 		cwd: getResumeCwd(invocationMetadata),
-		env: buildSubagentChildEnv({
-			envMetadata: invocationMetadata,
-			extensions,
-			name: invocationMetadata?.name ?? options.displayName,
-			agent: invocationMetadata?.agent ?? options.agent,
-			sessionFile,
-			autoExit: options.autoExit,
-		}),
+		env,
 		stdio: backgroundResumeStdio(options.parentClosePolicy),
 	};
 }

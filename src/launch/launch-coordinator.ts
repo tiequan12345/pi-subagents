@@ -1,5 +1,11 @@
 import { existsSync } from "node:fs";
 import {
+	applyDelegatedAuthExtensions,
+	buildDelegatedAuthRequest,
+	mergeDelegatedAuthEnv,
+	resolveDelegatedAuthOverlay,
+} from "./delegated-auth.ts";
+import {
 	buildPersistedSubagentLaunchMetadata,
 	getBaseSubagentEnvVars,
 	prepareSubagentLaunch,
@@ -42,6 +48,30 @@ export async function coordinateSubagentLaunch(
 	options: { mode: ResumeMode; systemPrompt?: string },
 ): Promise<CoordinatedSubagentLaunch> {
 	const prepared = await prepareSubagentLaunch(params, ctx);
+	// Overlay before seed/metadata so CLI args, extension entry, and metadata stay aligned.
+	const delegatedAuth = await resolveDelegatedAuthOverlay(
+		buildDelegatedAuthRequest({
+			effectiveModel: prepared.effectiveModel,
+			effectiveModelRef: prepared.effectiveModelRef,
+			parentSessionId:
+				typeof ctx.sessionManager.getSessionId === "function"
+					? ctx.sessionManager.getSessionId()
+					: undefined,
+			subagentSessionId: prepared.subagentSessionFile,
+		}),
+	);
+	if (delegatedAuth) {
+		const extensionPlan = applyDelegatedAuthExtensions(
+			prepared.effectiveExtensions,
+			delegatedAuth.extensionDirs,
+		);
+		prepared.effectiveExtensions = extensionPlan.effectiveExtensions;
+		prepared.requiredExtensions = extensionPlan.requiredExtensions;
+		prepared.delegatedAuth = {
+			brokerId: delegatedAuth.brokerId,
+			mode: "self-managed",
+		};
+	}
 	const sessionMode = resolveEffectiveSessionMode(params, prepared.agentDefs);
 	const noSession = resolveSubagentNoSession(prepared.agentDefs);
 	const noSessionSeedMode = noSession ? getNoSessionSeedMode(sessionMode) : null;
@@ -70,6 +100,8 @@ export async function coordinateSubagentLaunch(
 	const envVars = getBaseSubagentEnvVars(prepared, params, resolveEffectiveSessionMode);
 	if (prepared.agentDefs?.autoExit) envVars.PI_SUBAGENT_AUTO_EXIT = "1";
 	envVars.PI_SUBAGENT_SESSION = prepared.subagentSessionFile;
+	// Broker env last (frontmatter reserved keys already stripped in getBaseSubagentEnvVars).
+	mergeDelegatedAuthEnv(envVars, delegatedAuth);
 	const launchEntryCount = existsSync(prepared.subagentSessionFile)
 		? getEntryCount(prepared.subagentSessionFile)
 		: 0;

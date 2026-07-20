@@ -33,6 +33,7 @@ import {
 	buildPiPromptArgs,
 	getDoneSentinelFile,
 } from "../session/session-files.ts";
+import { maskInheritedDelegatedAuthEnv } from "./delegated-auth.ts";
 import { coordinateSubagentLaunch } from "./launch-coordinator.ts";
 import { writeSystemPromptArtifact, writeTaskArtifact } from "./prompt-artifacts.ts";
 import { expandSubagentTask } from "./task-expansion.ts";
@@ -145,11 +146,11 @@ export async function launchInteractiveSubagent(
 	}
 
 	const backend = getMuxBackend();
-	const envVars = {
+	const envVars = maskInheritedDelegatedAuthEnv({
 		...launch.envVars,
 		PI_SUBAGENT_SURFACE: surface,
 		...(backend === "orca" ? { PI_SUBAGENT_MUX: "orca" } : {}),
-	};
+	});
 	const envPrefix = `${Object.entries(envVars)
 		.map(([key, value]) => `${key}=${shellEscape(value)}`)
 		.join(" ")} `;

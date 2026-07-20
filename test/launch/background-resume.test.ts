@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
+	buildBackgroundResumePlan,
 	buildSubagentChildEnv,
 	prepareRunningForRespawn,
 } from "../../src/launch/background-resume.ts";
@@ -115,5 +116,186 @@ describe("prepareRunningForRespawn", () => {
 	it("throws when the running child has no session file", () => {
 		const running = bgRunning({ sessionFile: undefined });
 		assert.throws(() => prepareRunningForRespawn(running), /session file/);
+	});
+});
+
+describe("buildBackgroundResumePlan delegated auth", () => {
+	it("keeps persisted extensions and re-prepares runtime-dir env", async () => {
+		const sessionFile = join(
+			tmpdir(),
+			`bg-resume-auth-${Date.now()}-${Math.random().toString(16).slice(2)}.jsonl`,
+		);
+		writeFileSync(sessionFile, "{}\n");
+		const globalScope = globalThis as typeof globalThis & {
+			__piDelegatedAuthBrokerRegistry?: { list: () => unknown[] };
+		};
+		const previous = globalScope.__piDelegatedAuthBrokerRegistry;
+		globalScope.__piDelegatedAuthBrokerRegistry = {
+			list: () => [
+				{
+					id: "pi-multi-auth",
+					capabilities: ["delegated-auth"],
+					prepareSubagentAuth: () => ({
+						mode: "self-managed",
+						extensionDirs: ["/abs/pi-multi-auth"],
+						env: { PI_DELEGATED_AUTH_RUNTIME_DIR: "/resume/runtime" },
+					}),
+				},
+			],
+		};
+		try {
+			const metadata = {
+				version: 1,
+				timestamp: new Date().toISOString(),
+				name: "codex-child",
+				mode: "background",
+				sessionMode: "standalone",
+				parentClosePolicy: "terminate",
+				async: true,
+				model: "openai-codex/gpt-5.6-luna",
+				modelRef: "openai-codex/gpt-5.6-luna:xhigh",
+				extensions: ["npm:pi-mcp-adapter", "/abs/pi-multi-auth"],
+				requiredExtensions: ["/abs/pi-multi-auth"],
+				delegatedAuth: { brokerId: "pi-multi-auth", mode: "self-managed" },
+				env: "PI_DELEGATED_AUTH_RUNTIME_DIR=/spoofed",
+				denyTools: [],
+				noContextFiles: false,
+				noSession: false,
+				trustProject: false,
+				allowModelOverride: true,
+				boundarySystemPrompt: false,
+				agentConfigDir: "/tmp/agent",
+				cwd: "/tmp",
+			} as PersistedSubagentLaunchMetadata;
+			const plan = await buildBackgroundResumePlan(sessionFile, metadata, {
+				parentClosePolicy: "terminate",
+				displayName: "codex-child",
+				autoExit: true,
+			});
+			assert.equal(plan.env.PI_DELEGATED_AUTH_RUNTIME_DIR, "/resume/runtime");
+			assert.equal(
+				plan.env.PI_SUBAGENT_EXTENSIONS,
+				"npm:pi-mcp-adapter,/abs/pi-multi-auth",
+			);
+			assert.ok(plan.invocation.args.includes("/abs/pi-multi-auth"));
+			assert.ok(plan.invocation.args.includes("npm:pi-mcp-adapter"));
+		} finally {
+			if (previous) globalScope.__piDelegatedAuthBrokerRegistry = previous;
+			else delete globalScope.__piDelegatedAuthBrokerRegistry;
+			rmSync(sessionFile, { force: true });
+		}
+	});
+
+	it("resumes all-extensions metadata with required -e and without --no-extensions", async () => {
+		const sessionFile = join(
+			tmpdir(),
+			`bg-resume-all-${Date.now()}-${Math.random().toString(16).slice(2)}.jsonl`,
+		);
+		writeFileSync(sessionFile, "{}\n");
+		const globalScope = globalThis as typeof globalThis & {
+			__piDelegatedAuthBrokerRegistry?: { list: () => unknown[] };
+		};
+		const previous = globalScope.__piDelegatedAuthBrokerRegistry;
+		let prepareCalls = 0;
+		globalScope.__piDelegatedAuthBrokerRegistry = {
+			list: () => [
+				{
+					id: "pi-multi-auth",
+					capabilities: ["delegated-auth"],
+					prepareSubagentAuth: () => {
+						prepareCalls += 1;
+						return {
+							mode: "self-managed",
+							extensionDirs: ["/abs/pi-multi-auth"],
+							env: { PI_DELEGATED_AUTH_RUNTIME_DIR: "/resume/runtime" },
+						};
+					},
+				},
+			],
+		};
+		try {
+			const metadata = {
+				version: 1,
+				timestamp: new Date().toISOString(),
+				name: "open-child",
+				mode: "background",
+				sessionMode: "standalone",
+				parentClosePolicy: "terminate",
+				async: true,
+				model: "openai-codex/gpt-5.6-luna",
+				modelRef: "openai-codex/gpt-5.6-luna:low",
+				requiredExtensions: ["/abs/pi-multi-auth"],
+				delegatedAuth: { brokerId: "pi-multi-auth", mode: "self-managed" },
+				denyTools: [],
+				noContextFiles: false,
+				noSession: false,
+				trustProject: false,
+				allowModelOverride: true,
+				boundarySystemPrompt: false,
+				agentConfigDir: "/tmp/agent",
+				cwd: "/tmp",
+			} as PersistedSubagentLaunchMetadata;
+			const plan = await buildBackgroundResumePlan(sessionFile, metadata, {
+				parentClosePolicy: "terminate",
+				displayName: "open-child",
+				autoExit: true,
+			});
+			assert.equal(prepareCalls, 1);
+			assert.equal(plan.env.PI_DELEGATED_AUTH_RUNTIME_DIR, "/resume/runtime");
+			assert.ok(plan.invocation.args.includes("/abs/pi-multi-auth"));
+			assert.equal(plan.invocation.args.includes("--no-extensions"), false);
+		} finally {
+			if (previous) globalScope.__piDelegatedAuthBrokerRegistry = previous;
+			else delete globalScope.__piDelegatedAuthBrokerRegistry;
+			rmSync(sessionFile, { force: true });
+		}
+	});
+
+	it("fails resume when a required delegated-auth broker is unavailable", async () => {
+		const sessionFile = join(
+			tmpdir(),
+			`bg-resume-req-${Date.now()}-${Math.random().toString(16).slice(2)}.jsonl`,
+		);
+		writeFileSync(sessionFile, "{}\n");
+		const globalScope = globalThis as typeof globalThis & {
+			__piDelegatedAuthBrokerRegistry?: { list: () => unknown[] };
+		};
+		const previous = globalScope.__piDelegatedAuthBrokerRegistry;
+		delete globalScope.__piDelegatedAuthBrokerRegistry;
+		try {
+			const metadata = {
+				version: 1,
+				timestamp: new Date().toISOString(),
+				name: "codex-child",
+				mode: "background",
+				sessionMode: "standalone",
+				parentClosePolicy: "terminate",
+				async: true,
+				model: "openai-codex/gpt-5.6-luna",
+				extensions: ["npm:pi-mcp-adapter", "/abs/pi-multi-auth"],
+				requiredExtensions: ["/abs/pi-multi-auth"],
+				delegatedAuth: { brokerId: "pi-multi-auth", mode: "self-managed" },
+				denyTools: [],
+				noContextFiles: false,
+				noSession: false,
+				trustProject: false,
+				allowModelOverride: true,
+				boundarySystemPrompt: false,
+				agentConfigDir: "/tmp/agent",
+				cwd: "/tmp",
+			} as PersistedSubagentLaunchMetadata;
+			await assert.rejects(
+				() =>
+					buildBackgroundResumePlan(sessionFile, metadata, {
+						parentClosePolicy: "terminate",
+						displayName: "codex-child",
+						autoExit: true,
+					}),
+				/required for this session but did not prepare auth/,
+			);
+		} finally {
+			if (previous) globalScope.__piDelegatedAuthBrokerRegistry = previous;
+			rmSync(sessionFile, { force: true });
+		}
 	});
 });

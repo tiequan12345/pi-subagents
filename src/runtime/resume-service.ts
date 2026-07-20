@@ -7,16 +7,20 @@ import {
 	buildSubagentChildEnv,
 	spawnBackgroundResumeChild,
 } from "../launch/background-resume.ts";
+import {
+	applyDelegatedAuthEnvOverlay,
+	maskInheritedDelegatedAuthEnv,
+} from "../launch/delegated-auth.ts";
 import { writeResumeTaskArtifact } from "../launch/prompt-artifacts.ts";
 import { expandSubagentTask } from "../launch/task-expansion.ts";
 import { buildInteractiveSentinelShellCommands } from "../launch/interactive-sentinel.ts";
 import { assertModelAllowed, buildModelRef } from "../agents/model-refs.ts";
 import {
-	getExtensionLaunchArgs,
 	getPersistedPromptLaunchArgs,
 	getPersistedSessionParityArgs,
 	normalizeModelRef,
 	resolveAvailableModelRef,
+	resolveResumeExtensionLaunchArgs,
 } from "../launch/prep.ts";
 import {
 	buildResumePiArgs,
@@ -30,7 +34,6 @@ import { getEntryCount } from "../session/session.ts";
 import {
 	getDoneSentinelFile,
 	isResumeMode,
-	readSubagentExtensionEntry,
 	readSubagentLaunchMetadata,
 	writeSubagentLaunchMetadataEntry,
 	writeSubagentModelStateEntries,
@@ -199,11 +202,12 @@ export async function resumeSubagentSession(
 		"tools",
 		"subagent-done.ts",
 	);
-	const savedExtensions =
-		invocationMetadata?.extensions ?? readSubagentExtensionEntry(sessionFile);
-	const extensionArgs = savedExtensions
-		? getExtensionLaunchArgs(savedExtensions, subagentDonePath)
-		: ["--no-extensions", "-e", subagentDonePath];
+	const { extensions: savedExtensions, args: extensionArgs } =
+		resolveResumeExtensionLaunchArgs(
+			sessionFile,
+			invocationMetadata,
+			subagentDonePath,
+		);
 	const parityArgs = [
 		...getPersistedPromptLaunchArgs(invocationMetadata),
 		...(await getPersistedSessionParityArgs(invocationMetadata, metadata.mode)),
@@ -255,6 +259,7 @@ export async function resumeSubagentSession(
 	};
 
 	if (metadata.mode === "background") {
+		// buildBackgroundResumePlan owns delegated-auth re-prepare (single call).
 		const plan = await buildBackgroundResumePlan(sessionFile, invocationMetadata, {
 			parentClosePolicy: running.parentClosePolicy,
 			displayName: name,
@@ -263,6 +268,12 @@ export async function resumeSubagentSession(
 		});
 		spawnBackgroundResumeChild(running, plan, expandedTask);
 	} else {
+		await applyDelegatedAuthEnvOverlay(resumeEnvVars, {
+			effectiveModel: invocationMetadata?.model,
+			effectiveModelRef: invocationMetadata?.modelRef,
+			subagentSessionId: sessionFile,
+			required: invocationMetadata?.delegatedAuth,
+		});
 		const surfaceName = invocationMetadata?.sessionTitle ?? displayName;
 		const surface = createSurface(surfaceName);
 		await new Promise<void>((resolve) =>
@@ -286,7 +297,8 @@ export async function resumeSubagentSession(
 			parts.push(shellEscape(`@${taskPath}`));
 		}
 		resumeEnvVars.PI_SUBAGENT_SURFACE = surface;
-		const resumeEnvPrefix = `${Object.entries(resumeEnvVars)
+		const maskedResumeEnv = maskInheritedDelegatedAuthEnv(resumeEnvVars);
+		const resumeEnvPrefix = `${Object.entries(maskedResumeEnv)
 			.map(([key, value]) => `${key}=${shellEscape(value)}`)
 			.join(" ")} `;
 		const sentinel = buildInteractiveSentinelShellCommands(doneSentinelFile);
