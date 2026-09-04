@@ -1,4 +1,4 @@
-import { isRetryableProviderErrorMessage } from "../auto-exit.ts";
+import { shouldRecoverProviderErrorMessage } from "../auto-exit.ts";
 import type { RunningSubagent, SubagentResult } from "../types.ts";
 
 /**
@@ -53,7 +53,7 @@ export function isRetryableBackgroundResult(
 ): boolean {
 	if (!result.errorMessage) return false;
 	if (running.noSession || !running.sessionFile) return false;
-	return isRetryableProviderErrorMessage(result.errorMessage);
+	return shouldRecoverProviderErrorMessage(result.errorMessage);
 }
 
 /**

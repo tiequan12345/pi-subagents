@@ -6,6 +6,7 @@ import type {
 	SubagentResult,
 	WaitParams,
 } from "../types.ts";
+import { describeFailedResultBody } from "./state.ts";
 import { formatElapsed } from "./wiring.ts";
 import type { WaitRuntime } from "./wait.ts";
 
@@ -20,7 +21,8 @@ function getSubagentWaitPingResult(
 				type: "text",
 				text:
 					`Sub-agent "${running.name}" requested help and exited. ` +
-					`Resume it with subagent_resume using sessionFile ${result.sessionFile ?? "(missing)"}.`,
+					`Resume it with subagent_resume using sessionFile ${result.sessionFile ?? "(missing)"}.` +
+					`\n\nMessage from the subagent:\n${result.ping?.message ?? ""}`,
 			},
 		],
 		details: {
@@ -47,9 +49,7 @@ function getSubagentWaitSuccessResult(cached: CompletedSubagentResult) {
 		text =
 			`Sub-agent "${cached.name}" failed after ${formatElapsed(cached.elapsed)} ` +
 			`(provider/agent error — auto-retry exhausted).\n\n` +
-			`Error: ${cached.errorMessage}\n\n` +
-			`The subagent did not produce a result. You can retry by spawning a new ` +
-			`subagent or resume the session with subagent_resume.${sessionRef}`;
+			`Error: ${cached.errorMessage}\n\n${describeFailedResultBody(cached)}${sessionRef}`;
 	} else {
 		const verb =
 			cached.status === "completed"

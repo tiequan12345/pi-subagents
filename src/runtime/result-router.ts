@@ -4,16 +4,94 @@ import type {
 	SubagentPingMessageDetails,
 	SubagentResult,
 } from "../types.ts";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	buildCompletedSubagentResult,
 	cacheCompletedSubagentResult,
 	clearSubagentShutdownTimer,
+	describeFailedResultBody,
 	runningSubagents,
 	stopAfterCurrentSubagentBatch,
 } from "./state.ts";
 
-interface ParentMessageSink {
-	sendMessage(message: unknown, options: unknown): void;
+type ParentMessageSink = Pick<ExtensionAPI, "sendMessage" | "sendUserMessage">;
+
+// Session-entry reader for delivery verification. Registered by the parent
+// extension on session_start; returns undefined when unavailable (tests,
+// pre-registration) so verification stays silent instead of escalating blindly.
+type SessionEntriesReader = () => unknown[] | undefined;
+let sessionEntriesReader: SessionEntriesReader | undefined;
+
+export function setSessionEntriesReader(reader: SessionEntriesReader | undefined): void {
+	sessionEntriesReader = reader;
+}
+
+function entryDelivered(id: string): boolean | undefined {
+	const entries = sessionEntriesReader?.();
+	if (entries === undefined) return undefined;
+	return entries.some((entry) => {
+		const e = entry as { type?: string; customType?: string; details?: { id?: string } } | undefined;
+		return (
+			e?.type === "custom_message" &&
+			e?.customType === "subagent_result" &&
+			e?.details?.id === id
+		);
+	});
+}
+
+const DELIVERY_CHECK_DELAYS_MS = [8_000, 25_000];
+
+function sessionRefFor(completed: CompletedSubagentResult): string {
+	return completed.sessionFile
+		? `\n\nSession: ${completed.sessionFile}\nResume: pi --session ${completed.sessionFile}`
+		: "";
+}
+
+/**
+ * Re-send a completion as a direct user message when the routed custom message
+ * never persisted. Covers the known silent-loss paths: sendMessage rejections
+ * (model/auth errors at trigger time), nextTurn-queued results whose turn never
+ * comes, and steers consumed by a run that had just ended. sendUserMessage
+ * always starts (or steers into) a live turn and flushes queued nextTurn
+ * messages, so the report cannot vanish. Returns true when it escalated.
+ * Throws if sendUserMessage throws — the scheduler catches; direct callers
+ * that must not throw should do the same.
+ */
+export function escalateIfUndelivered(
+	pi: ParentMessageSink,
+	completed: CompletedSubagentResult,
+	formatElapsed: (elapsed: number) => string,
+): boolean {
+	// "steer" here covers both steer and nextTurn deliveries —
+	// deliverCompletedSubagentResult assigns it before routing either way;
+	// wait/blocking claims overwrite it with "wait" and must never escalate.
+	if (completed.deliveredTo !== "steer") return false;
+	if (entryDelivered(completed.id) !== false) return false; // landed, or unverifiable
+	pi.sendUserMessage(
+		`${getCompletedSubagentContent(completed, formatElapsed, sessionRefFor(completed))}` +
+			`\n\n(Delivery check: the routed result never reached this session, so it is resent here.)`,
+		{ deliverAs: "steer" },
+	);
+	return true;
+}
+
+function scheduleDeliveryVerification(
+	pi: ParentMessageSink,
+	completed: CompletedSubagentResult,
+	formatElapsed: (elapsed: number) => string,
+): void {
+	let escalated = false; // escalation itself persists a user message, invisible to entryDelivered
+	for (const delay of DELIVERY_CHECK_DELAYS_MS) {
+		const timer = setTimeout(() => {
+			if (escalated) return;
+			try {
+				escalated = escalateIfUndelivered(pi, completed, formatElapsed);
+			} catch {
+				// Never let the guard crash the routing path.
+			}
+		}, delay);
+		timer.unref?.();
+	}
 }
 
 export interface RouteSubagentOutcomeOptions {
@@ -75,9 +153,7 @@ export function deliverCompletedSubagentResult(
 
 	const deliverAs = stopAfterCurrentSubagentBatch ? "nextTurn" : "steer";
 	completed.deliveredTo = "steer";
-	const sessionRef = completed.sessionFile
-		? `\n\nSession: ${completed.sessionFile}\nResume: pi --session ${completed.sessionFile}`
-		: "";
+	const sessionRef = sessionRefFor(completed);
 	pi.sendMessage(
 		{
 			customType: "subagent_result",
@@ -103,6 +179,7 @@ export function deliverCompletedSubagentResult(
 		},
 		{ triggerTurn: true, deliverAs },
 	);
+	scheduleDeliveryVerification(pi, completed, formatElapsed);
 	return completed;
 }
 
@@ -148,16 +225,20 @@ function getCompletedSubagentContent(
 	formatElapsed: (elapsed: number) => string,
 	sessionRef: string,
 ): string {
+	// State the arrival explicitly: after an async launch the parent's turn is
+	// terminated mid-plan, so without this framing models have resumed their
+	// stale "waiting for the report" plan and ignored the injected findings.
+	const arrival =
+		`This is the completed report from sub-agent "${completed.name}" — it has ` +
+		`finished; do not wait for further output. Act on it now.\n\n`;
 	if (completed.errorMessage) {
 		return (
-			`Sub-agent "${completed.name}" failed after ${formatElapsed(completed.elapsed)} ` +
+			`${arrival}Sub-agent "${completed.name}" failed after ${formatElapsed(completed.elapsed)} ` +
 			`(provider/agent error — auto-retry exhausted).\n\n` +
-			`Error: ${completed.errorMessage}\n\n` +
-			`The subagent did not produce a result. You can retry by spawning a new ` +
-			`subagent or resume the session with subagent_resume.${sessionRef}`
+			`Error: ${completed.errorMessage}\n\n${describeFailedResultBody(completed)}${sessionRef}`
 		);
 	}
 	return completed.exitCode !== 0
-		? `Sub-agent "${completed.name}" failed (exit ${completed.exitCode}).\n\n${completed.summary}${sessionRef}`
-		: `Sub-agent "${completed.name}" completed (${formatElapsed(completed.elapsed)}).\n\n${completed.summary}${sessionRef}`;
+		? `${arrival}Sub-agent "${completed.name}" failed (exit ${completed.exitCode}).\n\n${completed.summary}${sessionRef}`
+		: `${arrival}Sub-agent "${completed.name}" completed (${formatElapsed(completed.elapsed)}).\n\n${completed.summary}${sessionRef}`;
 }

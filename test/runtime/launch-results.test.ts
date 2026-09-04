@@ -477,4 +477,54 @@ describe("subagent launch result delivery", () => {
 		);
 	});
 
+	it("suppresses the ambient roster when PI_SUBAGENT_DISABLE_AMBIENT_AWARENESS=1", () => {
+		const dir = createTestDir();
+		const configDir = join(dir, "agent-root");
+		const agentsDir = join(configDir, "agents");
+		mkdirSync(agentsDir, { recursive: true });
+		process.env.PI_CODING_AGENT_DIR = configDir;
+		process.env.PI_SUBAGENT_DISABLE_AMBIENT_AWARENESS = "1";
+		writeFileSync(
+			join(agentsDir, "reviewer.md"),
+			`---\nname: reviewer\ndescription: Review changes for regressions\nmode: background\n---\n\nReviewer body.`,
+		);
+
+		const handlers = new Map<string, any>();
+		subagentsExtension({
+			on(event: string, handler: any) {
+				handlers.set(event, handler);
+			},
+			registerCommand() {},
+			registerMessageRenderer() {},
+			registerTool() {},
+			sendMessage() {},
+		} as any);
+
+		handlers.get("session_start")(
+			{ type: "session_start", reason: "startup" },
+			{
+				cwd: dir,
+				hasUI: false,
+				ui: { setWidget() {} },
+				sessionManager: {
+					getHeader: () => ({
+						id: "root",
+						type: "session",
+						timestamp: "",
+						cwd: dir,
+					}),
+				},
+			},
+		);
+
+		assert.equal(
+			handlers.get("before_agent_start")({
+				type: "before_agent_start",
+				prompt: "hi",
+				systemPrompt: "sys",
+			}),
+			undefined,
+		);
+	});
+
 });

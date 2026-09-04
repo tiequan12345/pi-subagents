@@ -69,6 +69,7 @@ import {
 	stopAfterCurrentSubagentBatch,
 } from "./runtime/state.ts";
 import { classifyAssistantMessageForMixedBatch } from "./runtime/batch-classifier.ts";
+import { setSessionEntriesReader } from "./runtime/result-router.ts";
 import { ORCHESTRATOR_ALLOWED_TOOL_NAMES, SUBAGENT_TOOL_NAME } from "./tools/tool-names.ts";
 import { registerSubagentCommands } from "./tools/commands.ts";
 import { registerSubagentMessageRenderers } from "./tools/message-renderers.ts";
@@ -162,6 +163,13 @@ export default function subagentsExtension(pi: ExtensionAPI) {
 		resetSubagentBatchStopRequest();
 		applySubagentLineage(ctx);
 		attachWidgetContext(ctx);
+		setSessionEntriesReader(() => {
+			try {
+				return ctx.sessionManager.getEntries();
+			} catch {
+				return undefined;
+			}
+		});
 
 		// Restrict active tools in orchestrator mode
 		if (ORCHESTRATOR_MODE) {
@@ -173,6 +181,16 @@ export default function subagentsExtension(pi: ExtensionAPI) {
 		}
 
 		if (!shouldRegister(SUBAGENT_TOOL_NAME)) return;
+
+		// PI_SUBAGENT_DISABLE_AMBIENT_AWARENESS=1 opts out of the proactive roster
+		// note. Subagents stay launchable; the parent just gets no automatic hint
+		// to use them. Clear any stale pending state so a reload after toggling
+		// the flag cannot leak a roster from the prior configuration.
+		if (process.env.PI_SUBAGENT_DISABLE_AMBIENT_AWARENESS === "1") {
+			pendingAmbientRoster = null;
+			lastAmbientRosterSignature = null;
+			return;
+		}
 
 		// Reset the cached signature on every fresh session so module-level state
 		// does not leak between sessions. The reload path still uses the cached

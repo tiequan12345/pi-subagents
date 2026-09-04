@@ -32,6 +32,19 @@ import {
 } from "./set-tab-title.ts";
 
 const require = createRequire(import.meta.url);
+const TOOL_BOUNDARY_RECOVERY_NUDGE = "continue";
+const MAX_CONSECUTIVE_TOOL_BOUNDARY_ENDS = 3;
+
+function endedAtToolUseBoundary(messages: unknown[] | undefined): boolean {
+	if (!messages) return false;
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i] as { role?: unknown; stopReason?: unknown } | undefined;
+		if (message?.role !== "assistant") continue;
+		if (typeof message.stopReason !== "string") return false;
+		return message.stopReason.replace(/[-_]/g, "").toLowerCase() === "tooluse";
+	}
+	return false;
+}
 
 function isMissingOptionalDependency(error: unknown, id: string): boolean {
 	const maybeError = error as { code?: unknown; message?: unknown } | null;
@@ -185,9 +198,12 @@ export default function (pi: ExtensionAPI) {
 		}, 0);
 	}
 
-	function writeExitSignal(payload: SubagentExitSignal) {
+	function writeExitSignal(
+		payload: SubagentExitSignal,
+		opts?: { supersede?: boolean },
+	) {
 		const sessionFile = process.env.PI_SUBAGENT_SESSION;
-		if (sessionFile) writeSubagentExitSignal(sessionFile, payload);
+		if (sessionFile) writeSubagentExitSignal(sessionFile, payload, opts);
 	}
 
 	const subagentName = process.env.PI_SUBAGENT_NAME ?? "";
@@ -218,12 +234,14 @@ export default function (pi: ExtensionAPI) {
 	// failure when the process is about to exit before a delayed nudge can fire
 	// (notably `pi -p` background children, which exit as soon as Pi's own retries
 	// finish).
-	let pendingProviderError: { errorMessage: string; stopReason: "error" } | null =
-		null;
+	let pendingProviderError: {
+		errorMessage: string;
+		stopReason: "error" | "toolUse";
+	} | null = null;
 	type PendingPiRecovery = {
 		token: number;
 		errorMessage: string;
-		stopReason: "error";
+		stopReason: "error" | "toolUse";
 		ctx: Parameters<typeof requestShutdown>[0];
 		timer?: ReturnType<typeof setTimeout>;
 	};
@@ -259,7 +277,7 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function deferToPiNativeRecovery(
-		errorInfo: { errorMessage: string; stopReason: "error" },
+		errorInfo: { errorMessage: string; stopReason: "error" | "toolUse" },
 		ctx: Parameters<typeof requestShutdown>[0],
 	) {
 		cancelPendingPiRecovery();
@@ -324,7 +342,7 @@ export default function (pi: ExtensionAPI) {
 		enforceDeniedTools();
 	});
 
-	pi.on("message_end", (event) => {
+	pi.on("message_end", (event, ctx) => {
 		const message = event.message as {
 			role?: string;
 			stopReason?: string;
@@ -395,11 +413,25 @@ export default function (pi: ExtensionAPI) {
 	if (autoExit) {
 		let userTookOver = false;
 		let agentStarted = false;
+		let consecutiveToolBoundaryEnds = 0;
+		let toolExecutionsThisTurn = 0;
+		let terminatingToolExecutionsThisTurn = 0;
 
 		pi.on("agent_start", () => {
 			thresholdCompaction = "idle";
 			agentStarted = true;
 			userTookOver = false;
+		});
+
+		pi.on("turn_start", () => {
+			toolExecutionsThisTurn = 0;
+			terminatingToolExecutionsThisTurn = 0;
+		});
+
+		pi.on("tool_execution_end", (event) => {
+			toolExecutionsThisTurn += 1;
+			const result = event.result as { terminate?: unknown } | undefined;
+			if (result?.terminate === true) terminatingToolExecutionsThisTurn += 1;
 		});
 
 		pi.on("input", (event) => {
@@ -429,6 +461,32 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
+			const intentionallyTerminatedToolBatch =
+				toolExecutionsThisTurn > 0 &&
+				toolExecutionsThisTurn === terminatingToolExecutionsThisTurn;
+			if (endedAtToolUseBoundary(messages) && !intentionallyTerminatedToolBatch) {
+				pendingProviderError = null;
+				providerErrorRecovery.cancelPendingRecovery();
+				cancelPendingPiRecovery();
+				consecutiveToolBoundaryEnds += 1;
+				if (consecutiveToolBoundaryEnds < MAX_CONSECUTIVE_TOOL_BOUNDARY_ENDS) {
+					pi.sendUserMessage(TOOL_BOUNDARY_RECOVERY_NUDGE, {
+						deliverAs: "steer",
+					});
+					return;
+				}
+				writeExitSignal({
+					type: "error",
+					errorMessage:
+						`Subagent recovery exhausted after ${consecutiveToolBoundaryEnds} consecutive ` +
+						"tool-use boundary endings.",
+					stopReason: "toolUse",
+					outputTokens,
+				});
+				requestShutdown(ctx);
+				return;
+			}
+
 			// Provider errors can arrive before Pi's own retry machinery is truly done:
 			// a retryable error fires an agent_end, then Pi retries and may fire a
 			// second agent_end that succeeds. Arm a recovery window instead of killing
@@ -452,12 +510,6 @@ export default function (pi: ExtensionAPI) {
 				if (errorInfo.recoveryKind === "none") {
 					providerErrorRecovery.cancelPendingRecovery();
 					cancelPendingPiRecovery();
-					writeExitSignal({
-						type: "error",
-						errorMessage: errorInfo.errorMessage,
-						stopReason: errorInfo.stopReason,
-						outputTokens,
-					});
 					requestShutdown(ctx);
 					return;
 				}
@@ -467,10 +519,11 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			pendingProviderError = null;
+			consecutiveToolBoundaryEnds = 0;
 			providerErrorRecovery.cancelPendingRecovery(true);
 			cancelPendingPiRecovery();
 			if (isInteractive) {
-				writeExitSignal({ type: "done", outputTokens });
+				writeExitSignal({ type: "done", outputTokens }, { supersede: true });
 				requestShutdown(ctx);
 			}
 			// Background (`pi -p`) autoExit: Pi may run threshold compaction after
@@ -507,7 +560,7 @@ export default function (pi: ExtensionAPI) {
 				name: process.env.PI_SUBAGENT_NAME ?? "subagent",
 				message: params.message,
 				outputTokens,
-			});
+			}, { supersede: true });
 			requestShutdown(ctx);
 			return {
 				content: [
@@ -529,7 +582,7 @@ export default function (pi: ExtensionAPI) {
 				"Your LAST assistant message before calling this becomes the summary returned to the caller.",
 			parameters: doneParams,
 			async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-				writeExitSignal({ type: "done", outputTokens });
+				writeExitSignal({ type: "done", outputTokens }, { supersede: true });
 				requestShutdown(ctx);
 				return {
 					content: [{ type: "text", text: "Shutting down subagent session." }],

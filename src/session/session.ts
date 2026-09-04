@@ -5,6 +5,7 @@ import {
 	CALLER_PING_TOOL_NAME,
 	SUBAGENT_DONE_TOOL_NAME,
 } from "../tools/tool-names.ts";
+import type { SubagentSummarySource } from "../types.ts";
 
 export interface SessionEntry {
 	type: string;
@@ -82,11 +83,20 @@ function getTextContent(msg: MessageEntry): string | null {
 	return texts.length > 0 && texts.join("").trim() ? texts.join("\n") : null;
 }
 
-function getTerminalStopMessage(msg: MessageEntry): string | null {
+function getStopReason(msg: MessageEntry): string | null {
 	const stopReason = (msg.message as Record<string, unknown>).stopReason;
-	if (typeof stopReason !== "string" || stopReason.trim() === "") {
-		return null;
-	}
+	return typeof stopReason === "string" && stopReason.trim() !== ""
+		? stopReason
+		: null;
+}
+
+function isToolUseStopReason(stopReason: string | null): boolean {
+	return stopReason?.replace(/[-_]/g, "").toLowerCase() === "tooluse";
+}
+
+function getTerminalStopMessage(msg: MessageEntry): string | null {
+	const stopReason = getStopReason(msg);
+	if (!stopReason) return null;
 
 	const errorMessage = (msg.message as Record<string, unknown>).errorMessage;
 	if (stopReason === "error") {
@@ -107,28 +117,44 @@ export function getSubagentTerminalStopReason(summary: string): string | null {
 	return match?.[1]?.trim() || null;
 }
 
-export function findLastAssistantMessage(
-	entries: SessionEntry[],
-): string | null {
+export interface SubagentOutput {
+	summary: string;
+	summarySource: SubagentSummarySource;
+}
+
+function findLastAssistantOutput(entries: SessionEntry[]): SubagentOutput | null {
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const entry = entries[i];
 		if (entry.type !== "message") continue;
 		const msg = entry as MessageEntry;
 		if (msg.message.role !== "assistant") continue;
 		const text = getTextContent(msg);
-		if (text) return text;
+		if (text) return { summary: text, summarySource: "subagent" };
+		// A tool-use assistant message is a boundary, not a final answer. Stop
+		// before stale assistant text and let the caller inspect the trailing tool
+		// result, which may be the intentional output of a terminating tool.
+		if (isToolUseStopReason(getStopReason(msg))) return null;
 
 		// A terminal assistant turn with no text is still the child outcome.
-		// Surface it instead of scanning past it to stale earlier status text.
+		// Mark the synthesized status as runtime-owned instead of presenting it as
+		// the child's work.
 		const stopMessage = getTerminalStopMessage(msg);
-		if (stopMessage) return stopMessage;
+		if (stopMessage) return { summary: stopMessage, summarySource: "runtime" };
 	}
 	return null;
 }
 
-export function findLastSubagentOutput(entries: SessionEntry[]): string | null {
-	const assistantText = findLastAssistantMessage(entries);
-	if (assistantText) return assistantText;
+export function findLastAssistantMessage(
+	entries: SessionEntry[],
+): string | null {
+	return findLastAssistantOutput(entries)?.summary ?? null;
+}
+
+export function findLastSubagentOutputWithSource(
+	entries: SessionEntry[],
+): SubagentOutput | null {
+	const assistantOutput = findLastAssistantOutput(entries);
+	if (assistantOutput) return assistantOutput;
 
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const entry = entries[i];
@@ -138,9 +164,13 @@ export function findLastSubagentOutput(entries: SessionEntry[]): string | null {
 		if (msg.message.toolName === SUBAGENT_DONE_TOOL_NAME) continue;
 		if (msg.message.toolName === CALLER_PING_TOOL_NAME) continue;
 		const text = getTextContent(msg);
-		if (text) return text;
+		if (text) return { summary: text, summarySource: "subagent" };
 	}
 	return null;
+}
+
+export function findLastSubagentOutput(entries: SessionEntry[]): string | null {
+	return findLastSubagentOutputWithSource(entries)?.summary ?? null;
 }
 
 export function appendBranchSummary(

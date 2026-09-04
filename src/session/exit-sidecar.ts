@@ -1,4 +1,11 @@
-import { existsSync, linkSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	linkSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { randomUUID } from "node:crypto";
 
 type SignalBase = { outputTokens?: number };
@@ -10,7 +17,7 @@ export type SubagentExitSignal =
 	| (SignalBase & {
 			type: "error";
 			errorMessage: string;
-			stopReason: "error";
+			stopReason: "error" | "toolUse";
 		});
 
 export function getSubagentExitSidecarPath(sessionFile: string): string {
@@ -20,12 +27,27 @@ export function getSubagentExitSidecarPath(sessionFile: string): string {
 export function writeSubagentExitSignal(
 	sessionFile: string,
 	signal: SubagentExitSignal,
+	opts?: { supersede?: boolean },
 ): boolean {
 	const exitFile = getSubagentExitSidecarPath(sessionFile);
-	if (existsSync(exitFile)) return false;
+	const hadExistingFile = existsSync(exitFile);
+	if (hadExistingFile) {
+		if (!opts?.supersede) return false;
+		try {
+			const existing = JSON.parse(readFileSync(exitFile, "utf8"));
+			if (decodeSubagentExitSignal(existing).type !== "error") return false;
+		} catch {
+			// An unreadable sidecar cannot provide a terminal verdict. Replace it
+			// with the complete signal below rather than leaving the child stuck.
+		}
+	}
 	const tempFile = `${exitFile}.${process.pid}.${randomUUID()}.tmp`;
 	try {
 		writeFileSync(tempFile, JSON.stringify(signal), { encoding: "utf8", flag: "wx" });
+		if (opts?.supersede && hadExistingFile) {
+			renameSync(tempFile, exitFile);
+			return true;
+		}
 		// A hard link atomically publishes the complete temp file without replacing
 		// an existing signal when multiple processes race to finish first.
 		try {
@@ -74,7 +96,7 @@ export function decodeSubagentExitSignal(value: unknown): SubagentExitSignal {
 				? withTokens({
 					type: "error",
 					errorMessage: data.errorMessage,
-					stopReason: "error",
+					stopReason: data.stopReason === "toolUse" ? "toolUse" : "error",
 				})
 				: malformed();
 		default:

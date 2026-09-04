@@ -5,8 +5,8 @@ import {
 	pollForExit,
 } from "../mux.ts";
 import type { PollResult } from "../mux/poll.ts";
-import type { RunningSubagent, SubagentResult } from "../types.ts";
-import { findLastSubagentOutput, getNewEntries } from "../session/session.ts";
+import type { RunningSubagent, SubagentResult, SubagentSummarySource } from "../types.ts";
+import { findLastSubagentOutputWithSource, getNewEntries } from "../session/session.ts";
 import { traceSubagentLaunch } from "../launch/trace.ts";
 
 export interface InteractiveWatchRuntime {
@@ -60,23 +60,7 @@ export async function watchSubagent(
 				: null,
 		);
 		const elapsed = Math.floor((Date.now() - startTime) / 1000);
-		let summary: string;
-		if (!running.noSession && existsSync(sessionFile)) {
-			const allEntries = getNewEntries(
-				sessionFile,
-				running.launchEntryCount ?? 0,
-			);
-			summary =
-				findLastSubagentOutput(allEntries) ??
-				(completion.exitCode !== 0
-					? `Sub-agent exited with code ${completion.exitCode}`
-					: "Sub-agent exited without output");
-		} else {
-			summary =
-				completion.exitCode !== 0
-					? `Sub-agent exited with code ${completion.exitCode}`
-					: "Sub-agent exited without output";
-		}
+		const { summary, summarySource } = getSummary(running, completion);
 
 		const errorMessage =
 			completion.reason === "error" ? completion.errorMessage : undefined;
@@ -90,6 +74,7 @@ export async function watchSubagent(
 			name,
 			task,
 			summary,
+			summarySource,
 			sessionFile: running.noSession ? undefined : sessionFile,
 			exitCode: completion.exitCode,
 			elapsed,
@@ -112,6 +97,7 @@ export async function watchSubagent(
 				name,
 				task,
 				summary: "Subagent cancelled.",
+				summarySource: "runtime",
 				exitCode: 1,
 				elapsed: Math.floor((Date.now() - startTime) / 1000),
 				outputTokens: 0,
@@ -122,12 +108,33 @@ export async function watchSubagent(
 			name,
 			task,
 			summary: `Subagent error: ${errorMessage}`,
+			summarySource: "runtime",
 			exitCode: 1,
 			elapsed: Math.floor((Date.now() - startTime) / 1000),
 			outputTokens: 0,
 			error: errorMessage,
 		};
 	}
+}
+
+function getSummary(
+	running: RunningSubagent,
+	completion: PollResult,
+): { summary: string; summarySource: SubagentSummarySource } {
+	if (!running.noSession && existsSync(running.sessionFile)) {
+		const allEntries = getNewEntries(
+			running.sessionFile,
+			running.launchEntryCount ?? 0,
+		);
+		const output = findLastSubagentOutputWithSource(allEntries);
+		if (output) return output;
+	}
+	return {
+		summary: completion.exitCode !== 0
+			? `Sub-agent exited with code ${completion.exitCode}`
+			: "Sub-agent exited without output",
+		summarySource: "runtime",
+	};
 }
 
 function cleanupDoneSentinel(running: RunningSubagent): void {

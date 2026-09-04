@@ -30,25 +30,28 @@ function getSubagentCompletionStatus(
 		running?.mode === "interactive" &&
 		running.autoExit === false &&
 		!result.error &&
-		hasRealSubagentOutput(result.summary)
+		hasRealSubagentOutput(result)
 	) {
 		return "completed";
 	}
 	return "failed";
 }
 
-/**
- * True when the summary is a real child result rather than a watcher fallback
- * for a child that exited without answering. Used to tell an operator pane-close
- * of a manual interactive child apart from a crash before it produced output.
- */
-function hasRealSubagentOutput(summary: string | undefined): boolean {
-	const text = (summary ?? "").trim();
-	if (!text) return false;
-	return (
-		!text.startsWith("Sub-agent exited with code ") &&
-		text !== "Sub-agent exited without output"
-	);
+/** True when the summary came from the child rather than runtime diagnostics. */
+export function hasRealSubagentOutput(
+	result: Pick<SubagentResult, "summary" | "summarySource">,
+): boolean {
+	return result.summarySource !== "runtime" && result.summary.trim() !== "";
+}
+
+/** Body text for a failed-with-error result: salvage real output, else recovery advice. */
+export function describeFailedResultBody(
+	result: Pick<SubagentResult, "summary" | "summarySource">,
+): string {
+	return hasRealSubagentOutput(result)
+		? `Last output before the failure (may be incomplete — verify before trusting):\n\n${result.summary}`
+		: `The subagent did not produce a result. You can retry by spawning a new ` +
+			`subagent or resume the session with subagent_resume.`;
 }
 
 export function buildCompletedSubagentResult(

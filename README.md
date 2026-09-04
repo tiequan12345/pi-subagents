@@ -236,6 +236,12 @@ Normal child sessions do not receive ambient awareness, even with `spawning: tru
 
 Agents without descriptions remain launchable, but they do not appear in ambient awareness.
 
+Set `PI_SUBAGENT_DISABLE_AMBIENT_AWARENESS=1` to suppress the note entirely. Subagents stay launchable; the parent model just gets no proactive hint to use them. Use this when you prefer to invoke subagents only by explicit request.
+
+```bash
+PI_SUBAGENT_DISABLE_AMBIENT_AWARENESS=1 pi
+```
+
 ## Launching and waiting
 
 Async launch:
@@ -586,6 +592,7 @@ User-facing knobs:
 | `PI_SUBAGENT_MUX` | Force `herdr`, `cmux`, `tmux`, `zellij`, `wezterm`, or `orca` |
 | `PI_CODING_AGENT_DIR` | Use a different Pi agent config root |
 | `PI_SUBAGENT_DISABLE_COORDINATOR_ONLY_TURN` | Set `1` to let the parent keep running after async launches |
+| `PI_SUBAGENT_DISABLE_AMBIENT_AWARENESS` | Set `1` to suppress the proactive roster note to the parent model |
 | `PI_SUBAGENT_DISABLE_CHILD_CONTEXT_BOUNDARY` | Set `1` for raw forks with no boundary marker |
 | `PI_SUBAGENT_DISABLE_SESSION_TITLES` | Disable automatic child session names |
 | `PI_ARTIFACT_PROJECT_ROOT` | Override internal artifact storage root |

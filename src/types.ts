@@ -5,6 +5,7 @@ export type DeliveryState = "detached" | "awaited";
 export type ParentClosePolicy = "terminate" | "continue";
 type CompletedDelivery = "steer" | "wait";
 export type SubagentCompletionStatus = "completed" | "failed" | "cancelled";
+export type SubagentSummarySource = "subagent" | "runtime";
 export type ParentShutdownAction = "terminate" | "continue";
 
 export interface SubagentParamsInput {
@@ -40,6 +41,8 @@ export interface SubagentResult {
 	name: string;
 	task: string;
 	summary: string;
+	/** Origin of the summary text. Omitted legacy results are treated as subagent output. */
+	summarySource?: SubagentSummarySource;
 	sessionFile?: string;
 	exitCode: number;
 	elapsed: number;

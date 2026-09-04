@@ -22,7 +22,7 @@ export interface WaitRuntime {
 	): CompletedSubagentResult;
 	updateWidget(): void;
 	deliverCompletedSubagentResultViaSteer(
-		pi: Pick<ExtensionAPI, "sendMessage">,
+		pi: Pick<ExtensionAPI, "sendMessage" | "sendUserMessage">,
 		cached: CompletedSubagentResult,
 	): CompletedSubagentResult;
 	stopRunningSubagent(running: RunningSubagent): void;

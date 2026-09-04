@@ -169,3 +169,8 @@ After live testing:
 - restore `~/.pi/agent/agents/test.md` to `enabled: false` if changed
 - remove temporary session dirs if no longer needed
 - clear test-only environment variables
+
+## Quick failure fixes
+
+- `bunx biome check .` failing with "new blank line at EOF": strip the trailing blank line in the named file, re-run.
+- `ERR_MODULE_NOT_FOUND … 'tsx'`: run `npm install` once (restores lockfile deps), then re-run the test.

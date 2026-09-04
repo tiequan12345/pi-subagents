@@ -108,7 +108,7 @@ export function getLaunchedSubagentResultForTest(
 }
 
 export function routeDetachedSubagentCompletionForTest(
-	pi: Pick<ExtensionAPI, "sendMessage">,
+	pi: Pick<ExtensionAPI, "sendMessage" | "sendUserMessage">,
 	running: RunningSubagent,
 	result: SubagentResult,
 ): CompletedSubagentResult {
@@ -116,7 +116,7 @@ export function routeDetachedSubagentCompletionForTest(
 }
 
 function deliverCompletedSubagentResultViaSteer(
-	pi: Pick<ExtensionAPI, "sendMessage">,
+	pi: Pick<ExtensionAPI, "sendMessage" | "sendUserMessage">,
 	cached: CompletedSubagentResult,
 ): CompletedSubagentResult {
 	return deliverCompletedSubagentResultViaSteerWithDeps(pi, cached, formatElapsed);

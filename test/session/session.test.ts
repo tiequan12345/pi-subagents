@@ -13,6 +13,7 @@ import {
 	copySessionFile,
 	findLastAssistantMessage,
 	findLastSubagentOutput,
+	findLastSubagentOutputWithSource,
 	getEntries,
 	getEntryCount,
 	getLeafId,
@@ -284,6 +285,52 @@ describe("session.ts", () => {
 			] as any[];
 
 			assert.equal(findLastSubagentOutput(entries), "Final assistant summary.");
+		});
+
+		it("marks synthesized terminal errors as runtime summaries", () => {
+			const terminalError = {
+				type: "message",
+				message: {
+					role: "assistant",
+					content: [],
+					stopReason: "error",
+					errorMessage: "Provider unavailable",
+				},
+			};
+
+			assert.deepEqual(
+				findLastSubagentOutputWithSource([terminalError] as any[]),
+				{
+					summary: "Subagent error: Provider unavailable",
+					summarySource: "runtime",
+				},
+			);
+		});
+
+		it("uses a terminating tool result after a textless tool-use boundary", () => {
+			const entries = [
+				{
+					type: "message",
+					message: {
+						role: "assistant",
+						content: [{ type: "toolCall", name: "detached_launch", arguments: {} }],
+						stopReason: "toolUse",
+					},
+				},
+				{
+					type: "message",
+					message: {
+						role: "toolResult",
+						toolName: "detached_launch",
+						content: [{ type: "text", text: "INTENTIONAL_TOOL_RESULT_OK" }],
+					},
+				},
+			] as any[];
+
+			assert.deepEqual(findLastSubagentOutputWithSource(entries), {
+				summary: "INTENTIONAL_TOOL_RESULT_OK",
+				summarySource: "subagent",
+			});
 		});
 
 		it("does not fall back to stale output after a terminal length stop", () => {

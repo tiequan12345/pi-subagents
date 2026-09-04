@@ -207,7 +207,7 @@ export function shouldAwaitSubagentLaunch(
 }
 
 export function deliverCompletedSubagentResultViaSteer(
-	pi: Pick<ExtensionAPI, "sendMessage">,
+	pi: Pick<ExtensionAPI, "sendMessage" | "sendUserMessage">,
 	cached: CompletedSubagentResult,
 	formatElapsed: (elapsed: number) => string,
 ): CompletedSubagentResult {
